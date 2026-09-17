@@ -46,7 +46,8 @@ public class MaskService extends AccessibilityService {
     private static String lastLogMsg = "";
 
     private static final int COLOR_TEST = 0x88FF0000;
-    private static final String[] KEYS = {"cam", "metaai", "actus", "commu", "disctxt", "appelstxt"};
+    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt"};
+    private static final String KEY_TOP = "colortop";
 
     private WindowManager wm;
     private SharedPreferences prefs;
@@ -84,6 +85,7 @@ public class MaskService extends AccessibilityService {
     // Apprentissage de la couleur exacte du fond
     private View picker = null;
     private View tuner = null;
+    private boolean tuneTop = false;
     private boolean shotBusy = false;
     private long lastShot = 0;
 
@@ -422,6 +424,11 @@ public class MaskService extends AccessibilityService {
                 if (n.isVisibleToUser()) sc.want.put("cam", bounds(n));
             }
         }
+        if (prefs.getBoolean("title", true) && !sc.selectionMode) {
+            for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByViewId(px + "toolbar_logo")) {
+                if (n.isVisibleToUser()) sc.want.put("title", bounds(n));
+            }
+        }
         if (prefs.getBoolean("metaai", true) && !sc.callsSelected) {
             for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByViewId(px + "extended_mini_fab")) {
                 Rect r = bounds(n);
@@ -460,7 +467,10 @@ public class MaskService extends AccessibilityService {
         for (Item it : items) {
             if (!it.visible) continue;
             int cy = it.r.centerY();
-            if (prefs.getBoolean("cam", true) && !sc.selectionMode && cy < H * 0.15
+            if (prefs.getBoolean("title", true) && !sc.selectionMode && cy < H * 0.15
+                    && it.id.endsWith("toolbar_logo")) {
+                sc.want.put("title", new Rect(it.r));
+            } else if (prefs.getBoolean("cam", true) && !sc.selectionMode && cy < H * 0.15
                     && (it.id.endsWith("menuitem_camera") || is(it, "Caméra", "Appareil photo"))) {
                 sc.want.put("cam", new Rect(it.r));
             } else if (prefs.getBoolean("metaai", true) && !sc.callsSelected && cy > H * 0.4
@@ -567,7 +577,7 @@ public class MaskService extends AccessibilityService {
             return;
         }
 
-        int target = prefs.getInt("posx", 20);
+        int target = prefs.getInt("posx", 10);
         int d = goal.r.left - target;              // > 0 : trop à droite
         boolean stuck = lastLeft != Integer.MIN_VALUE && Math.abs(goal.r.left - lastLeft) < dp(2);
 
@@ -601,7 +611,7 @@ public class MaskService extends AccessibilityService {
             return;
         }
         Chip goal = findGoal(chips, norm(prefs.getString("liste", "")));
-        int target = prefs.getInt("posx", 20);
+        int target = prefs.getInt("posx", 10);
         int pos = goal == null ? chips.get(0).r.left : goal.r.left;
         boolean off = goal == null ? toutesVisible(chips) : goal.r.left > target + dp(6);
         if (!off) {
@@ -756,10 +766,15 @@ public class MaskService extends AccessibilityService {
 
     // ---------- Masques ----------
 
-    private int maskColor() {
+    static boolean isTopKey(String key) {
+        return key.equals("cam") || key.equals("title");
+    }
+
+    private int maskColor(String key) {
         if (prefs.getBoolean("debug", false)) return COLOR_TEST;
+        String pref = isTopKey(key) ? KEY_TOP : "color";
         try {
-            return Color.parseColor(prefs.getString("color", DEFAULT_COLOR).trim());
+            return Color.parseColor(prefs.getString(pref, prefs.getString("color", DEFAULT_COLOR)).trim());
         } catch (Exception e) {
             return Color.parseColor(DEFAULT_COLOR);
         }
@@ -796,8 +811,25 @@ public class MaskService extends AccessibilityService {
 
         final android.widget.TextView label = new android.widget.TextView(this);
         label.setTextColor(0xFFFFFFFF);
-        label.setText(prefs.getString("color", DEFAULT_COLOR));
         box.addView(label);
+
+        android.widget.LinearLayout zone = new android.widget.LinearLayout(this);
+        zone.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        android.widget.Button top = new android.widget.Button(this);
+        android.widget.Button bottom = new android.widget.Button(this);
+        top.setText("Haut");
+        bottom.setText("Bas");
+        Runnable refresh = () -> {
+            top.setTextColor(tuneTop ? 0xFF4CAF50 : 0xFFFFFFFF);
+            bottom.setTextColor(tuneTop ? 0xFFFFFFFF : 0xFF4CAF50);
+            label.setText((tuneTop ? "Haut : " : "Bas : ") + tuneHex());
+        };
+        top.setOnClickListener(v -> { tuneTop = true; refresh.run(); });
+        bottom.setOnClickListener(v -> { tuneTop = false; refresh.run(); });
+        zone.addView(top);
+        zone.addView(bottom);
+        box.addView(zone);
+        refresh.run();
 
         int[][] steps = {{1, 1, 1}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
         String[] names = {"Tout", "R", "V", "B"};
@@ -841,17 +873,23 @@ public class MaskService extends AccessibilityService {
         }
     }
 
+    private String tuneHex() {
+        String pref = tuneTop ? KEY_TOP : "color";
+        return prefs.getString(pref, prefs.getString("color", DEFAULT_COLOR));
+    }
+
     private android.widget.Button tuneButton(String text, int[] st, int sign, android.widget.TextView label) {
         android.widget.Button b = new android.widget.Button(this);
         b.setText(text);
         b.setOnClickListener(v -> {
-            int c = maskColor();
+            int c;
+            try { c = Color.parseColor(tuneHex().trim()); } catch (Exception e) { c = Color.parseColor(DEFAULT_COLOR); }
             int nc = Color.rgb(clamp(Color.red(c) + st[0] * sign),
                     clamp(Color.green(c) + st[1] * sign), clamp(Color.blue(c) + st[2] * sign));
             String hex = String.format("#%06X", nc & 0xFFFFFF);
-            prefs.edit().putString("color", hex).apply();
+            prefs.edit().putString(tuneTop ? KEY_TOP : "color", hex).apply();
             painted.clear();
-            label.setText(hex);
+            label.setText((tuneTop ? "Haut : " : "Bas : ") + hex);
             showMasks(lastWant, 0);
         });
         return b;
@@ -955,9 +993,10 @@ public class MaskService extends AccessibilityService {
                     prefs.edit().putBoolean("calibcolor", false).apply();
                     if (color != 0) {
                         String hex = String.format("#%06X", color & 0xFFFFFF);
-                        prefs.edit().putString("color", hex).apply();
+                        prefs.edit().putString(y < H * 0.2 ? KEY_TOP : "color", hex).apply();
                         painted.clear();
-                        log("Pipette : couleur mesurée " + hex + " en " + x + "," + y);
+                        log("Pipette : couleur " + hex + " pour la zone "
+                                + (y < H * 0.2 ? "haut" : "bas") + " (" + x + "," + y + ")");
                         schedule(30);
                     } else {
                         log("Pipette : mesure impossible");
@@ -1032,12 +1071,12 @@ public class MaskService extends AccessibilityService {
 
             if (v == null) {
                 v = new View(this);
-                paint(v, key, maskColor());
+                paint(v, key, maskColor(key));
                 v.setClickable(true);
                 try { wm.addView(v, params(g)); slots.put(key, v); } catch (Exception ignored) { }
                 continue;
             }
-            paint(v, key, maskColor());
+            paint(v, key, maskColor(key));
             WindowManager.LayoutParams lp = (WindowManager.LayoutParams) v.getLayoutParams();
             boolean changed = false;
             if ((lp.flags & WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) != 0) {

@@ -45,6 +45,7 @@ public class MainActivity extends Activity {
         root.addView(acc);
 
         title(root, "Éléments à masquer");
+        check(root, "title", "Nom « WhatsApp » en haut", true);
         check(root, "cam", "Bouton appareil photo (en haut)", true);
         check(root, "metaai", "Bouton Meta AI (rond violet)", true);
         check(root, "actus", "Onglet Actus", true);
@@ -54,7 +55,7 @@ public class MainActivity extends Activity {
         check(root, "debug", "Mode test : masques rouges transparents", false);
 
         TextView colorLabel = new TextView(this);
-        colorLabel.setText("Couleur des masques (code hexadécimal)");
+        colorLabel.setText("Couleur des masques du bas (code hexadécimal)");
         colorLabel.setPadding(0, dp(12), 0, 0);
         root.addView(colorLabel);
         EditText color = new EditText(this);
@@ -76,8 +77,32 @@ public class MainActivity extends Activity {
         });
         root.addView(pipette);
 
+        TextView colorTopLabel = new TextView(this);
+        colorTopLabel.setText("Couleur des masques du haut (nom WhatsApp, appareil photo)");
+        colorTopLabel.setPadding(0, dp(12), 0, 0);
+        root.addView(colorTopLabel);
+        EditText colorTop = new EditText(this);
+        colorTop.setSingleLine(true);
+        colorTop.setHint(MaskService.DEFAULT_COLOR);
+        colorTop.setText(prefs.getString("colortop", prefs.getString("color", MaskService.DEFAULT_COLOR)));
+        root.addView(colorTop);
+        Button saveTop = new Button(this);
+        saveTop.setText("Enregistrer la couleur du haut");
+        saveTop.setOnClickListener(v -> {
+            String c = colorTop.getText().toString().trim();
+            if (!c.startsWith("#")) c = "#" + c;
+            try {
+                android.graphics.Color.parseColor(c);
+                prefs.edit().putString("colortop", c).apply();
+                Toast.makeText(this, "Couleur du haut enregistrée", Toast.LENGTH_SHORT).show();
+            } catch (Exception e) {
+                Toast.makeText(this, "Code couleur invalide", Toast.LENGTH_SHORT).show();
+            }
+        });
+        root.addView(saveTop);
+
         Button tune = new Button(this);
-        tune.setText("Régler la couleur à la main dans WhatsApp");
+        tune.setText("Régler les couleurs à la main dans WhatsApp (haut et bas)");
         tune.setOnClickListener(v -> {
             prefs.edit().putBoolean("tune", true).apply();
             Intent wa = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
@@ -149,13 +174,13 @@ public class MainActivity extends Activity {
         EditText posX = new EditText(this);
         posX.setSingleLine(true);
         posX.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        posX.setText(String.valueOf(prefs.getInt("posx", 20)));
+        posX.setText(String.valueOf(prefs.getInt("posx", 10)));
         root.addView(posX);
         posX.addTextChangedListener(new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
             public void onTextChanged(CharSequence c, int a, int b, int d) { }
             public void afterTextChanged(android.text.Editable e) {
-                int val = 20;
+                int val = 10;
                 try { val = Integer.parseInt(e.toString().trim()); } catch (Exception ignored) { }
                 prefs.edit().putInt("posx", val).apply();
             }
