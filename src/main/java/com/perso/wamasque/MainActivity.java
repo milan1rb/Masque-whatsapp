@@ -85,13 +85,33 @@ public class MainActivity extends Activity {
         list.setSingleLine(true);
         list.setText(prefs.getString("liste", ""));
         root.addView(list);
-        Button save = new Button(this);
-        save.setText("Enregistrer la liste");
-        save.setOnClickListener(v -> {
-            prefs.edit().putString("liste", list.getText().toString().trim()).apply();
-            Toast.makeText(this, "Enregistré", Toast.LENGTH_SHORT).show();
+        TextView savedInfo = new TextView(this);
+        root.addView(savedInfo);
+        Runnable refresh = () -> {
+            String cur = prefs.getString("liste", "");
+            savedInfo.setText(cur.isEmpty() ? "⚠️ Aucune liste enregistrée" : "✅ Liste enregistrée : « " + cur + " »");
+        };
+        refresh.run();
+        list.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
+            public void onTextChanged(CharSequence c, int a, int b, int d) { }
+            public void afterTextChanged(android.text.Editable e) {
+                prefs.edit().putString("liste", e.toString().trim()).apply();
+                refresh.run();
+            }
         });
-        root.addView(save);
+        Button launch = new Button(this);
+        launch.setText("Tester : ouvrir WhatsApp avec la macro");
+        launch.setOnClickListener(v -> {
+            Intent wa = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
+            if (wa == null) {
+                Toast.makeText(this, "WhatsApp introuvable", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            MaskService.forceMacro = true;
+            startActivity(wa);
+        });
+        root.addView(launch);
         check(root, "slide", "Placer cette liste tout à gauche", true);
         check(root, "click", "Cliquer dessus", true);
 

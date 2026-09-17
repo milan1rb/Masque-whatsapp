@@ -34,6 +34,7 @@ public class MaskService extends AccessibilityService {
     static final String PREFS = "config";
     static final String DEFAULT_COLOR = "#0B1014";
     static volatile boolean running = false;
+    static volatile boolean forceMacro = false;
     private static volatile String lastDump = "(aucune capture de l'écran principal de WhatsApp)";
     private static final StringBuilder LOG = new StringBuilder();
     private static String lastLogMsg = "";
@@ -156,17 +157,21 @@ public class MaskService extends AccessibilityService {
         }
 
         long now = SystemClock.uptimeMillis();
-        if (!inWhatsApp) {
+        if (!inWhatsApp || forceMacro) {
             inWhatsApp = true;
-            boolean wantMacro = !p.getString("liste", "").trim().isEmpty()
+            forceMacro = false;
+            String saved = p.getString("liste", "").trim();
+            boolean wantMacro = !saved.isEmpty()
                     && (p.getBoolean("slide", true) || p.getBoolean("click", true));
+            if (saved.isEmpty()) log("WhatsApp ouvert : aucune liste enregistrée, macro désactivée");
+            else if (!wantMacro) log("WhatsApp ouvert : les 2 cases de la macro sont décochées");
             if (wantMacro) {
                 phase = 1;
                 phaseDeadline = now + 12000;
                 waitUntil = now + 500;
                 swipeTries = 0;
                 lastD = Integer.MIN_VALUE;
-                log("WhatsApp ouvert : macro démarrée");
+                log("WhatsApp ouvert : macro démarrée pour « " + saved + " »");
             }
         }
 
@@ -188,9 +193,13 @@ public class MaskService extends AccessibilityService {
                 items = list;
                 mainPkg = String.valueOf(root.getPackageName());
             } else {
-                Rect b = new Rect();
-                w.getBoundsInScreen(b);
-                popups.add(b);
+                Rect b = null;
+                for (Item it : list) {
+                    if (!it.visible || it.r.isEmpty()) continue;
+                    if (!it.node.isClickable() && it.text.isEmpty()) continue;
+                    if (b == null) b = new Rect(it.r); else b.union(it.r);
+                }
+                if (b != null) popups.add(b);
             }
         }
         if (items == null) {
@@ -455,7 +464,9 @@ public class MaskService extends AccessibilityService {
                 }
                 continue;
             }
-            Rect g = new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
+            boolean tab = key.equals("actus") || key.equals("commu");
+            Rect g = tab ? new Rect(r.left, r.top + dp(1), r.right, r.bottom)
+                         : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
 
             if (v == null) {
                 v = new View(this);
