@@ -51,6 +51,30 @@ public class MainActivity extends Activity {
         check(root, "commu", "Onglet Communautés", true);
         check(root, "debug", "Mode test : masques rouges transparents", false);
 
+        TextView colorLabel = new TextView(this);
+        colorLabel.setText("Couleur des masques (code hexadécimal)");
+        colorLabel.setPadding(0, dp(12), 0, 0);
+        root.addView(colorLabel);
+        EditText color = new EditText(this);
+        color.setSingleLine(true);
+        color.setHint(MaskService.DEFAULT_COLOR);
+        color.setText(prefs.getString("color", MaskService.DEFAULT_COLOR));
+        root.addView(color);
+        Button saveColor = new Button(this);
+        saveColor.setText("Enregistrer la couleur");
+        saveColor.setOnClickListener(v -> {
+            String c = color.getText().toString().trim();
+            if (!c.startsWith("#")) c = "#" + c;
+            try {
+                android.graphics.Color.parseColor(c);
+                prefs.edit().putString("color", c).apply();
+                Toast.makeText(this, "Couleur enregistrée", Toast.LENGTH_SHORT).show();
+            } catch (Exception e) {
+                Toast.makeText(this, "Code couleur invalide", Toast.LENGTH_SHORT).show();
+            }
+        });
+        root.addView(saveColor);
+
         title(root, "Macro au lancement de WhatsApp");
         TextView help = new TextView(this);
         help.setText("Écris le nom de la liste à mettre en premier (ex : Non lues, POTO'S). "

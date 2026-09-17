@@ -1,8 +1,10 @@
 package com.perso.wamasque;
 
 import android.accessibilityservice.AccessibilityService;
+import android.accessibilityservice.AccessibilityServiceInfo;
 import android.accessibilityservice.GestureDescription;
 import android.content.SharedPreferences;
+import android.graphics.Color;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
@@ -17,38 +19,41 @@ import android.view.ViewConfiguration;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 public class MaskService extends AccessibilityService {
 
     static final String PREFS = "config";
+    static final String DEFAULT_COLOR = "#0B1014";
     static volatile boolean running = false;
     private static volatile String lastDump = "(aucune capture de l'écran principal de WhatsApp)";
     private static final StringBuilder LOG = new StringBuilder();
     private static String lastLogMsg = "";
 
-    private static final int COLOR_MASK = 0xFF0B141A;
     private static final int COLOR_TEST = 0x88FF0000;
+    private static final String[] KEYS = {"cam", "metaai", "actus", "commu"};
 
     private WindowManager wm;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final List<View> views = new ArrayList<>();
-    private final List<Rect> shown = new ArrayList<>();
-    private int shownColor = 0;
+    private final Map<String, View> slots = new HashMap<>();
     private boolean scheduled = false;
     private boolean inWhatsApp = false;
     private long lastDumpTime = 0;
 
-    // Macro de lancement : 0 = rien, 1 = ramener les listes au début, 2 = cliquer, 3 = vérifier
+    // Macro de lancement : 0 = rien, 1 = placer la liste, 2 = cliquer, 3 = vérifier
     private int phase = 0;
     private long phaseDeadline = 0;
     private long waitUntil = 0;
     private int swipeTries = 0;
+    private int lastD = Integer.MIN_VALUE;
     private boolean gestureBusy = false;
     private long gestureStart = 0;
 
@@ -68,11 +73,11 @@ public class MaskService extends AccessibilityService {
     static class Chip {
         Rect r;
         AccessibilityNodeInfo node;
-        boolean toutes, nonLues, selected;
-        List<String> labels = new ArrayList<>();
+        String name;
+        boolean selected;
     }
 
-    // ---------- Journal (visible dans l'app, bouton diagnostic) ----------
+    // ---------- Journal ----------
 
     static synchronized void log(String msg) {
         if (msg.equals(lastLogMsg)) return;
@@ -96,13 +101,12 @@ public class MaskService extends AccessibilityService {
         running = true;
         log("Service connecté (gestes autorisés : "
                 + ((getServiceInfo().getCapabilities()
-                & android.accessibilityservice.AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0)
-                + ")");
+                & AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0) + ")");
     }
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        schedule(120);
+        schedule(100);
     }
 
     private void schedule(long delay) {
@@ -119,22 +123,31 @@ public class MaskService extends AccessibilityService {
     public void onDestroy() {
         running = false;
         handler.removeCallbacks(tick);
-        showRects(new ArrayList<>(), 0);
+        for (View v : slots.values()) {
+            try { wm.removeView(v); } catch (Exception ignored) { }
+        }
+        slots.clear();
         super.onDestroy();
+    }
+
+    private static boolean isWa(CharSequence pkg) {
+        return pkg != null && (pkg.toString().equals("com.whatsapp") || pkg.toString().equals("com.whatsapp.w4b"));
     }
 
     // ---------- Boucle principale ----------
 
     private void update() {
-        AccessibilityNodeInfo root = getRootInActiveWindow();
-        if (root == null) {
+        AccessibilityNodeInfo active = getRootInActiveWindow();
+        if (active == null) {
             if (phase != 0) schedule(300);
             return;
         }
-        String pkg = String.valueOf(root.getPackageName());
+        String pkg = String.valueOf(active.getPackageName());
+        SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+        int color = parseColor(p);
 
-        if (!pkg.equals("com.whatsapp") && !pkg.equals("com.whatsapp.w4b")) {
-            showRects(new ArrayList<>(), 0);
+        if (!isWa(pkg)) {
+            showMasks(new HashMap<>(), color);
             if (!pkg.equals("com.android.systemui")) {
                 inWhatsApp = false;
                 phase = 0;
@@ -142,18 +155,17 @@ public class MaskService extends AccessibilityService {
             return;
         }
 
-        SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
         long now = SystemClock.uptimeMillis();
-
         if (!inWhatsApp) {
             inWhatsApp = true;
             boolean wantMacro = !p.getString("liste", "").trim().isEmpty()
                     && (p.getBoolean("slide", true) || p.getBoolean("click", true));
             if (wantMacro) {
                 phase = 1;
-                phaseDeadline = now + 10000;
-                waitUntil = now + 600;
+                phaseDeadline = now + 12000;
+                waitUntil = now + 500;
                 swipeTries = 0;
+                lastD = Integer.MIN_VALUE;
                 log("WhatsApp ouvert : macro démarrée");
             }
         }
@@ -162,86 +174,93 @@ public class MaskService extends AccessibilityService {
         wm.getDefaultDisplay().getRealMetrics(dm);
         int W = dm.widthPixels, H = dm.heightPixels;
 
-        List<Item> items = new ArrayList<>();
-        collect(root, 0, items);
-
-        boolean hasDisc = false, hasCalls = false, discSelected = false, callsSelected = false;
-        for (Item it : items) {
-            if (it.r.centerY() > H * 0.8) {
-                if (is(it, "Discussions")) {
-                    hasDisc = true;
-                    if (it.node.isSelected() || clickableNode(it.node, W).isSelected()) discSelected = true;
-                }
-                if (is(it, "Appels")) {
-                    hasCalls = true;
-                    if (it.node.isSelected() || clickableNode(it.node, W).isSelected()) callsSelected = true;
-                }
+        // Toutes les fenêtres de WhatsApp : l'écran principal + menus/popups éventuels
+        List<Item> items = null;
+        String mainPkg = pkg;
+        List<Rect> popups = new ArrayList<>();
+        for (AccessibilityWindowInfo w : getWindows()) {
+            if (w.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) continue;
+            AccessibilityNodeInfo root = w.getRoot();
+            if (root == null || !isWa(root.getPackageName())) continue;
+            List<Item> list = new ArrayList<>();
+            collect(root, 0, list);
+            if (items == null && isHome(list, H)) {
+                items = list;
+                mainPkg = String.valueOf(root.getPackageName());
+            } else {
+                Rect b = new Rect();
+                w.getBoundsInScreen(b);
+                popups.add(b);
             }
         }
-        boolean home = hasDisc && hasCalls;
-
-        if (home && now - lastDumpTime > 1500) {
-            lastDumpTime = now;
-            lastDump = dump(items, pkg);
+        if (items == null) {
+            // Pas sur l'écran principal (dans une discussion, réglages…)
+            showMasks(new HashMap<>(), color);
+            if (phase != 0) runMacro(false, new ArrayList<>(), p, now, W);
+            return;
         }
 
-        String wanted = norm(p.getString("liste", ""));
-        List<Chip> chips = home ? findChips(items, W, H, wanted) : new ArrayList<>();
+        if (now - lastDumpTime > 1500) {
+            lastDumpTime = now;
+            lastDump = dump(items, mainPkg);
+        }
 
         // ----- Masques -----
-        List<Rect> rects = new ArrayList<>();
-        if (home) {
-            // Mode sélection (appui long) : la barre du haut affiche Archiver, Épingler...
-            boolean selectionMode = false;
-            for (Item it : items) {
-                if (it.visible && it.r.centerY() < H * 0.15
-                        && (has(it, "archiv") || starts(it, "Épingl") || starts(it, "Supprimer")
-                        || starts(it, "Désactiver"))) {
-                    selectionMode = true;
-                }
-            }
-            boolean onDiscussions = !callsSelected && (discSelected || !chips.isEmpty());
-
-            boolean aiFound = false;
-            for (Item it : items) {
-                if (!it.visible) continue;
-                int cy = it.r.centerY();
-
-                if (p.getBoolean("cam", true) && !selectionMode && cy < H * 0.15
-                        && (is(it, "Appareil photo", "Caméra", "Camera") || it.id.contains("camera"))) {
-                    add(rects, target(it.node, W));
-
-                } else if (p.getBoolean("metaai", true) && onDiscussions && cy > H * 0.5
-                        && it.r.left > W * 0.6 && it.r.width() < W * 0.4 && !it.node.isEditable()
-                        && (has(it, "meta ai") || it.id.contains("meta_ai"))) {
-                    add(rects, target(it.node, W));
-                    aiFound = true;
-
-                } else if (p.getBoolean("actus", true) && cy > H * 0.8 && is(it, "Actus")) {
-                    add(rects, target(it.node, W));
-
-                } else if (p.getBoolean("commu", true) && cy > H * 0.8 && starts(it, "Communaut")) {
-                    add(rects, target(it.node, W));
-                }
-            }
-            if (p.getBoolean("metaai", true) && onDiscussions && !aiFound) {
-                maskMetaAiFallback(items, rects, W, H);
+        boolean selectionMode = false;
+        for (Item it : items) {
+            if (it.visible && it.r.centerY() < H * 0.15
+                    && (has(it, "archiv") || starts(it, "Épingl") || starts(it, "Supprimer"))) {
+                selectionMode = true;
             }
         }
-        showRects(rects, p.getBoolean("debug", false) ? COLOR_TEST : COLOR_MASK);
 
-        // ----- Macro de lancement -----
-        if (phase != 0) runMacro(home, chips, wanted, p, now, W);
+        Map<String, Rect> want = new HashMap<>();
+        for (Item it : items) {
+            if (!it.visible) continue;
+            int cy = it.r.centerY();
+            if (p.getBoolean("cam", true) && !selectionMode && cy < H * 0.15
+                    && (it.id.endsWith("menuitem_camera") || is(it, "Caméra", "Appareil photo"))) {
+                want.put("cam", new Rect(it.r));
+            } else if (p.getBoolean("metaai", true) && cy > H * 0.4 && it.r.width() < W * 0.4
+                    && (it.id.endsWith("extended_mini_fab") || has(it, "message à l'ia") || has(it, "meta ai"))
+                    && !it.node.isEditable()) {
+                if (!want.containsKey("metaai")) want.put("metaai", target(it.node, W));
+            } else if (p.getBoolean("actus", true) && cy > H * 0.8 && is(it, "Actus")) {
+                want.put("actus", target(it.node, W));
+            } else if (p.getBoolean("commu", true) && cy > H * 0.8 && starts(it, "Communaut")) {
+                want.put("commu", target(it.node, W));
+            }
+        }
+        // Ne jamais recouvrir un menu ouvert (⋮, appui long…)
+        for (String k : KEYS) {
+            Rect r = want.get(k);
+            if (r == null) continue;
+            for (Rect pop : popups) if (Rect.intersects(r, pop)) { want.remove(k); break; }
+        }
+        showMasks(want, p.getBoolean("debug", false) ? COLOR_TEST : color);
+
+        // ----- Macro -----
+        if (phase != 0) runMacro(true, findChips(items, H), p, now, W);
     }
 
-    private void runMacro(boolean home, List<Chip> chips, String wanted, SharedPreferences p,
-                          long now, int W) {
+    private boolean isHome(List<Item> items, int H) {
+        boolean disc = false, calls = false;
+        for (Item it : items) {
+            if (it.r.centerY() > H * 0.8) {
+                if (is(it, "Discussions")) disc = true;
+                if (is(it, "Appels")) calls = true;
+            }
+        }
+        return disc && calls;
+    }
+
+    private void runMacro(boolean home, List<Chip> chips, SharedPreferences p, long now, int W) {
         if (now > phaseDeadline) {
             log("Macro abandonnée : délai dépassé (étape " + phase + ")");
             phase = 0;
             return;
         }
-        schedule(300); // on continue de vérifier même si l'écran ne bouge plus
+        schedule(300);
 
         if (!home) { log("En attente de l'écran principal…"); return; }
         if (now < waitUntil) return;
@@ -251,12 +270,12 @@ public class MaskService extends AccessibilityService {
         }
         if (chips.isEmpty()) { log("Barre des listes introuvable"); return; }
 
+        String wanted = norm(p.getString("liste", ""));
         boolean slide = p.getBoolean("slide", true);
         Chip goal = null;
-        for (Chip c : chips) for (String l : c.labels) if (norm(l).startsWith(wanted)) goal = c;
+        for (Chip c : chips) if (norm(c.name).startsWith(wanted)) { goal = c; break; }
 
         if (goal == null) {
-            // Liste pas encore à l'écran : on fait défiler la barre vers la droite
             if (swipeTries < 6) {
                 swipeTries++;
                 log("« " + wanted + " » pas visible, défilement — " + describe(chips));
@@ -269,26 +288,31 @@ public class MaskService extends AccessibilityService {
             return;
         }
 
-        int d = goal.r.left - dp(16);   // > 0 : trop à droite, < 0 : coupée à gauche
+        int d = goal.r.left - dp(20);   // > 0 : trop à droite, < 0 : coupée à gauche
+        boolean stuck = lastD != Integer.MIN_VALUE && Math.abs(d - lastD) < dp(4);
 
         if (phase == 1 || phase == 3) {
             int maxTries = phase == 1 ? 6 : 8;
-            if (slide && Math.abs(d) > dp(12) && swipeTries < maxTries) {
+            if (slide && Math.abs(d) > dp(12) && swipeTries < maxTries && !stuck) {
                 swipeTries++;
-                log("Placement de « " + label(goal) + " » : décalage " + d + " px — " + describe(chips));
+                lastD = d;
+                log("Placement de « " + goal.name + " » : décalage " + d + " px — " + describe(chips));
                 swipe(goal.r.centerY(), d);
                 waitUntil = now + 700;
-            } else if (phase == 1) {
-                if (slide) log("« " + label(goal) + " » est à gauche — " + describe(chips));
-                phase = 2;
             } else {
-                log("Macro terminée");
-                phase = 0;
+                if (stuck) log("La barre ne peut pas aller plus loin — " + describe(chips));
+                lastD = Integer.MIN_VALUE;
+                if (phase == 1) {
+                    phase = 2;
+                } else {
+                    log("Macro terminée — " + describe(chips));
+                    phase = 0;
+                }
             }
 
         } else if (phase == 2) {
             if (p.getBoolean("click", true)) {
-                if (goal.selected) log("Déjà sélectionnée : " + label(goal));
+                if (goal.selected) log("Déjà sélectionnée : " + goal.name);
                 else click(goal);
                 waitUntil = now + 800;
             }
@@ -297,55 +321,33 @@ public class MaskService extends AccessibilityService {
     }
 
     // ---------- Barre des listes ----------
+    // WhatsApp les décrit ainsi : RadioButton [Filtre POTO'S, ‎1, désélectionné]
 
-    private List<Chip> findChips(List<Item> items, int W, int H, String wanted) {
+    private List<Chip> findChips(List<Item> items, int H) {
         List<Chip> chips = new ArrayList<>();
-        Rect band = null;
         for (Item it : items) {
-            if (it.r.centerY() < H * 0.4 && (starts(it, "Toutes") || starts(it, "Non lues")
-                    || (!wanted.isEmpty() && starts(it, wanted)))) {
-                band = target(it.node, W);
-                break;
-            }
-        }
-        if (band == null) return chips;
-
-        for (Item it : items) {
-            int cy = it.r.centerY();
-            if (cy < band.top || cy > band.bottom || it.r.isEmpty()) continue;
-            if (it.text.isEmpty() && it.desc.isEmpty()) continue;
-            AccessibilityNodeInfo cn = clickableNode(it.node, W);
-            Rect r = new Rect();
-            cn.getBoundsInScreen(r);
-            if (r.isEmpty() || r.height() > H * 0.1 || r.width() > W * 0.6) continue;
-            Chip c = null;
-            for (Chip e : chips) if (r.left < e.r.right && r.right > e.r.left) { c = e; break; }
-            if (c == null) {
-                c = new Chip();
-                c.r = new Rect(r);
-                chips.add(c);
-            } else {
-                c.r.union(r);
-            }
-            if (c.node == null || (!c.node.isClickable() && cn.isClickable())) c.node = cn;
-            if (starts(it, "Toutes")) c.toutes = true;
-            if (starts(it, "Non lues")) c.nonLues = true;
-            if (!it.text.isEmpty()) c.labels.add(it.text);
-            if (!it.desc.isEmpty()) c.labels.add(it.desc);
-            if (it.node.isSelected() || it.node.isChecked() || cn.isSelected() || cn.isChecked()) c.selected = true;
+            String d = it.desc.replace("\u200E", "").trim();
+            if (it.r.isEmpty() || it.r.centerY() > H * 0.4) continue;
+            if (!norm(d).startsWith("filtre ")) continue;
+            String rest = d.substring(7);
+            int comma = rest.indexOf(',');
+            Chip c = new Chip();
+            c.name = (comma >= 0 ? rest.substring(0, comma) : rest).trim();
+            String state = norm(d);
+            c.selected = it.node.isChecked()
+                    || (state.endsWith("sélectionné") && !state.endsWith("désélectionné"));
+            c.r = new Rect(it.r);
+            c.node = it.node;
+            chips.add(c);
         }
         chips.sort((a, b) -> Integer.compare(a.r.left, b.r.left));
         return chips;
     }
 
-    private String label(Chip c) {
-        return c.labels.isEmpty() ? "?" : c.labels.get(0);
-    }
-
     private String describe(List<Chip> chips) {
         StringBuilder sb = new StringBuilder();
         for (Chip c : chips) {
-            sb.append('[').append(label(c)).append(" x=").append(c.r.left).append('-').append(c.r.right);
+            sb.append('[').append(c.name).append(" x=").append(c.r.left).append('-').append(c.r.right);
             if (c.selected) sb.append(" SEL");
             sb.append("] ");
         }
@@ -356,7 +358,7 @@ public class MaskService extends AccessibilityService {
 
     private void click(Chip c) {
         if (c.node != null && c.node.isClickable() && c.node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-            log("Clic sur « " + label(c) + " » (action)");
+            log("Clic sur « " + c.name + " »");
             return;
         }
         Path path = new Path();
@@ -366,12 +368,12 @@ public class MaskService extends AccessibilityService {
         startGesture();
         boolean ok = dispatchGesture(g, callback("Appui"), null);
         if (!ok) gestureBusy = false;
-        log("Appui sur « " + label(c) + " » (geste envoyé : " + ok + ")");
+        log("Appui sur « " + c.name + " » (geste envoyé : " + ok + ")");
     }
 
-    // Fait défiler la barre : dist > 0 = contenu vers la gauche, dist < 0 = vers la droite.
-    // Mouvement lent puis doigt immobile avant de relâcher, pour éviter l'effet "lancer".
-    // On évite les bords de l'écran (geste retour d'Android).
+    // dist > 0 : contenu vers la gauche, dist < 0 : vers la droite.
+    // Mouvement lent puis doigt immobile avant de relâcher (pas d'effet "lancer"),
+    // et loin des bords de l'écran (geste retour d'Android).
     private void swipe(int y, int dist) {
         DisplayMetrics dm = new DisplayMetrics();
         wm.getDefaultDisplay().getRealMetrics(dm);
@@ -434,39 +436,87 @@ public class MaskService extends AccessibilityService {
     }
 
     // ---------- Masques ----------
+    // Une fenêtre fixe par élément : jamais supprimée ni déplacée vers un autre élément,
+    // juste cachée/affichée sur place, sans animation.
 
-    // Bouton Meta AI : juste au-dessus du bouton vert "nouvelle discussion"
-    private void maskMetaAiFallback(List<Item> items, List<Rect> rects, int W, int H) {
-        Item fab = null;
-        for (Item it : items) {
-            Rect r = it.r;
-            if (!it.node.isClickable()) continue;
-            if (r.left < W * 0.6 || r.centerY() < H * 0.6 || r.centerY() > H * 0.9) continue;
-            if (r.width() < W * 0.09 || r.width() > W * 0.3) continue;
-            if (Math.abs(r.width() - r.height()) > r.width() * 0.3) continue;
-            if (fab == null || r.bottom > fab.r.bottom) fab = it;
-        }
-        if (fab == null || has(fab, "appel")) return;
-        Rect f = fab.r;
-        Rect ai = null;
-        for (Item it : items) {
-            Rect r = it.r;
-            if (it == fab || !it.node.isClickable()) continue;
-            if (r.bottom <= f.top + dp(4) && r.bottom > f.top - f.height()
-                    && r.centerX() > f.left && r.centerX() < f.right
-                    && r.width() < f.width() * 1.2 && r.width() > f.width() * 0.4) {
-                ai = new Rect(r);
-                break;
+    private void showMasks(Map<String, Rect> want, int color) {
+        if (wm == null) return;
+        int m = dp(2);
+        for (String key : KEYS) {
+            Rect r = want.get(key);
+            View v = slots.get(key);
+
+            if (r == null || r.isEmpty()) {
+                if (v != null && v.getVisibility() == View.VISIBLE) {
+                    v.setVisibility(View.INVISIBLE);
+                    WindowManager.LayoutParams lp = (WindowManager.LayoutParams) v.getLayoutParams();
+                    lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                    try { wm.updateViewLayout(v, lp); } catch (Exception ignored) { }
+                }
+                continue;
+            }
+            Rect g = new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
+
+            if (v == null) {
+                v = new View(this);
+                v.setBackgroundColor(color);
+                v.setClickable(true);
+                try { wm.addView(v, params(g)); slots.put(key, v); } catch (Exception ignored) { }
+                continue;
+            }
+            v.setBackgroundColor(color);
+            WindowManager.LayoutParams lp = (WindowManager.LayoutParams) v.getLayoutParams();
+            boolean changed = false;
+            if ((lp.flags & WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) != 0) {
+                lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                changed = true;
+            }
+            if (lp.x != g.left || lp.y != g.top || lp.width != g.width() || lp.height != g.height()) {
+                lp.x = g.left;
+                lp.y = g.top;
+                lp.width = g.width();
+                lp.height = g.height();
+                changed = true;
+            }
+            if (changed) {
+                try { wm.updateViewLayout(v, lp); } catch (Exception ignored) { }
+            }
+            if (v.getVisibility() != View.VISIBLE) {
+                final View fv = v;
+                v.post(() -> fv.setVisibility(View.VISIBLE));
             }
         }
-        if (ai == null) {
-            int size = f.width() * 82 / 100;
-            int cx = f.centerX();
-            int bottom = f.top - f.height() * 30 / 100;
-            ai = new Rect(cx - size / 2, bottom - size, cx + size / 2, bottom);
-        }
-        add(rects, ai);
     }
+
+    private WindowManager.LayoutParams params(Rect r) {
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                r.width(), r.height(),
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.OPAQUE);
+        lp.gravity = Gravity.TOP | Gravity.START;
+        lp.x = r.left;
+        lp.y = r.top;
+        lp.windowAnimations = 0;
+        if (Build.VERSION.SDK_INT >= 28) {
+            lp.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        }
+        if (Build.VERSION.SDK_INT >= 30) lp.setFitInsetsTypes(0);
+        return lp;
+    }
+
+    private int parseColor(SharedPreferences p) {
+        try {
+            return Color.parseColor(p.getString("color", DEFAULT_COLOR).trim());
+        } catch (Exception e) {
+            return Color.parseColor(DEFAULT_COLOR);
+        }
+    }
+
+    // ---------- Outils ----------
 
     private void collect(AccessibilityNodeInfo n, int depth, List<Item> out) {
         if (n == null || depth > 45 || out.size() > 1500) return;
@@ -505,64 +555,11 @@ public class MaskService extends AccessibilityService {
         return r;
     }
 
-    private void add(List<Rect> rects, Rect r) {
-        if (r.isEmpty()) return;
-        int m = dp(3);
-        Rect g = new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
-        for (Rect e : rects) if (e.contains(g)) return;
-        for (int i = rects.size() - 1; i >= 0; i--) if (g.contains(rects.get(i))) rects.remove(i);
-        rects.add(g);
-    }
-
-    private void showRects(List<Rect> rects, int color) {
-        if (wm == null) return;
-        if (rects.equals(shown) && color == shownColor) return;
-
-        while (views.size() > rects.size()) {
-            View v = views.remove(views.size() - 1);
-            try { wm.removeView(v); } catch (Exception ignored) { }
-        }
-        for (int i = 0; i < rects.size(); i++) {
-            WindowManager.LayoutParams lp = params(rects.get(i));
-            if (i < views.size()) {
-                View v = views.get(i);
-                v.setBackgroundColor(color);
-                try { wm.updateViewLayout(v, lp); } catch (Exception ignored) { }
-            } else {
-                View v = new View(this);
-                v.setBackgroundColor(color);
-                v.setClickable(true);
-                try { wm.addView(v, lp); views.add(v); } catch (Exception ignored) { }
-            }
-        }
-        shown.clear();
-        for (Rect r : rects) shown.add(new Rect(r));
-        shownColor = color;
-    }
-
-    private WindowManager.LayoutParams params(Rect r) {
-        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-                r.width(), r.height(),
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                PixelFormat.TRANSLUCENT);
-        lp.gravity = Gravity.TOP | Gravity.START;
-        lp.x = r.left;
-        lp.y = r.top;
-        if (Build.VERSION.SDK_INT >= 28) {
-            lp.layoutInDisplayCutoutMode =
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-        }
-        if (Build.VERSION.SDK_INT >= 30) lp.setFitInsetsTypes(0);
-        return lp;
-    }
-
     private String dump(List<Item> items, String pkg) {
         StringBuilder sb = new StringBuilder("Paquet : " + pkg + "\n");
         for (Item it : items) {
             if (sb.length() > 40000) { sb.append("…(tronqué)"); break; }
+            if (!it.visible) continue;
             for (int i = 0; i < Math.min(it.depth, 20); i++) sb.append(' ');
             sb.append(it.cls);
             if (!it.text.isEmpty()) sb.append(" \"").append(it.text).append('"');
@@ -572,7 +569,6 @@ public class MaskService extends AccessibilityService {
             if (it.node.isClickable()) sb.append(" CLIC");
             if (it.node.isSelected() || it.node.isChecked()) sb.append(" SELECT");
             if (it.node.isScrollable()) sb.append(" SCROLL");
-            if (!it.visible) sb.append(" invisible");
             sb.append('\n');
         }
         return sb.toString();
@@ -583,7 +579,7 @@ public class MaskService extends AccessibilityService {
     }
 
     private static String norm(String s) {
-        return s == null ? "" : s.replace('\u2019', '\'').trim().toLowerCase(Locale.ROOT);
+        return s == null ? "" : s.replace('\u2019', '\'').replace("\u200E", "").trim().toLowerCase(Locale.ROOT);
     }
 
     private static boolean is(Item it, String... words) {
