@@ -84,6 +84,7 @@ public class MaskService extends AccessibilityService {
     private String pendingClick = null;
     private long pendingClickTime = 0;
     private int pendingFinger = 0;
+    private long suppressUntil = 0;
     private boolean fastBroken = false;
     private long lastFullCheck = 0;
     private long lastChipScan = 0;
@@ -174,8 +175,12 @@ public class MaskService extends AccessibilityService {
                     int score = prefs.getInt("cls:" + cls, 0);
                     if (score >= 1 && imeBounds() == null) {
                         metrics();
+                        suppressUntil = 0;
                         showMasks(loadCache(cls), 0);
-                    } else if (score <= 0) {
+                    } else if (score <= -1) {
+                        // ce bouton mène ailleurs : on retire tout de suite et on empêche
+                        // le réaffichage pendant l'animation de WhatsApp
+                        suppressUntil = t + 900;
                         showMasks(new HashMap<>(), 0);
                     }
                 }
@@ -204,10 +209,12 @@ public class MaskService extends AccessibilityService {
                 int score = prefs.getInt("cls:" + cls, 0);
                 if (score >= 1 && imeBounds() == null) {
                     metrics();
+                    suppressUntil = 0;
                     showMasks(loadCache(cls), 0);
                 } else {
                     // écran inconnu ou sans caches : on retire tout de suite,
                     // quitte à les remettre 30 ms plus tard si c'est l'écran principal
+                    if (score <= -1) suppressUntil = t + 400;
                     showMasks(new HashMap<>(), 0);
                 }
             } else if (pk != null && pk.toString().equals(launcherPkg)) {
@@ -307,6 +314,11 @@ public class MaskService extends AccessibilityService {
         }
 
         metrics();
+        if (now < suppressUntil) {
+            showMasks(new HashMap<>(), 0);
+            schedule(120);
+            return;
+        }
         if (prefs.getBoolean("calibcolor", false)) {
             showMasks(new HashMap<>(), 0);
             showPicker();
@@ -329,6 +341,7 @@ public class MaskService extends AccessibilityService {
         }
 
         lastHomeTime = now;
+        suppressUntil = 0;
         learnClass(now, true, sc);
 
         if (now - lastDumpTime > 10000) {
