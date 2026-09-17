@@ -3,11 +3,15 @@ package com.perso.wamasque;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.accessibilityservice.GestureDescription;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -43,28 +47,41 @@ public class MaskService extends AccessibilityService {
     private static final String[] KEYS = {"cam", "metaai", "actus", "commu"};
 
     private WindowManager wm;
+    private SharedPreferences prefs;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Map<String, View> slots = new HashMap<>();
     private boolean scheduled = false;
     private boolean inWhatsApp = false;
     private long lastDumpTime = 0;
+    private String launcherPkg = "";
+    private int W = 1080, H = 2400;
 
-    // Macro de lancement : 0 = rien, 1 = placer la liste, 2 = cliquer, 3 = vérifier
+    // Macro : 0 = rien, 1 = cliquer + placer la liste, 3 = vérification finale
     private int phase = 0;
     private long phaseDeadline = 0;
     private long waitUntil = 0;
     private int swipeTries = 0;
     private int lastD = Integer.MIN_VALUE;
     private boolean clickAfter = true;
+    private boolean clicked = false;
+    private boolean gestureBusy = false;
+    private long gestureStart = 0;
+
+    // Retour automatique à la position de base
     private long misalignedSince = 0;
+    private int watchPos = Integer.MIN_VALUE;
+
+    // Apprentissage
     private long lastHomeTime = 0;
     private Map<String, Rect> lastWant = new HashMap<>();
-    // Apprentissage de la précision du glissement
+    private String savedCacheStr = null;
+    private String pendingClass = null;
+    private long pendingClassTime = 0;
     private int calibReq = 0;
     private int calibLeft = Integer.MIN_VALUE;
     private String calibName = null;
-    private boolean gestureBusy = false;
-    private long gestureStart = 0;
+    private boolean fastBroken = false;
+    private long lastFullCheck = 0;
 
     private final Runnable tick = () -> {
         scheduled = false;
@@ -86,6 +103,15 @@ public class MaskService extends AccessibilityService {
         boolean selected;
     }
 
+    static class Scan {
+        boolean home, bigOther, selectionMode, callsSelected;
+        Map<String, Rect> want = new HashMap<>();
+        List<Rect> popups = new ArrayList<>();
+        List<Item> chipItems = new ArrayList<>();
+        AccessibilityNodeInfo homeRoot;
+        String homePkg = "com.whatsapp";
+    }
+
     // ---------- Journal ----------
 
     static synchronized void log(String msg) {
@@ -97,7 +123,7 @@ public class MaskService extends AccessibilityService {
     }
 
     static synchronized String diagnostic() {
-        return "Service actif : " + running + "\n\n=== Journal des macros ===\n"
+        return "Service actif : " + running + "\n\n=== Journal ===\n"
                 + (LOG.length() == 0 ? "(vide)\n" : LOG.toString())
                 + "\n=== Éléments de l'écran WhatsApp ===\n" + lastDump;
     }
@@ -107,6 +133,14 @@ public class MaskService extends AccessibilityService {
     @Override
     protected void onServiceConnected() {
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+        prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        metrics();
+        try {
+            ResolveInfo ri = getPackageManager().resolveActivity(
+                    new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+                    PackageManager.MATCH_DEFAULT_ONLY);
+            if (ri != null) launcherPkg = ri.activityInfo.packageName;
+        } catch (Exception ignored) { }
         running = true;
         log("Service connecté (gestes autorisés : "
                 + ((getServiceInfo().getCapabilities()
@@ -114,8 +148,27 @@ public class MaskService extends AccessibilityService {
     }
 
     @Override
-    public void onAccessibilityEvent(AccessibilityEvent event) {
-        schedule(100);
+    public void onAccessibilityEvent(AccessibilityEvent e) {
+        if (wm == null) return;
+        if (e.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            CharSequence pk = e.getPackageName();
+            String cls = String.valueOf(e.getClassName());
+            if (isWa(pk) && cls.startsWith("com.whatsapp")) {
+                // Écran déjà connu : on réagit tout de suite, sans attendre l'analyse
+                pendingClass = cls;
+                pendingClassTime = SystemClock.uptimeMillis();
+                int score = prefs.getInt("cls:" + cls, 0);
+                if (score >= 2) {
+                    metrics();
+                    showMasks(loadCache(), maskColor());
+                } else if (score <= -2) {
+                    showMasks(new HashMap<>(), 0);
+                }
+            } else if (pk != null && pk.toString().equals(launcherPkg)) {
+                showMasks(new HashMap<>(), 0);
+            }
+        }
+        schedule(30);
     }
 
     private void schedule(long delay) {
@@ -143,20 +196,25 @@ public class MaskService extends AccessibilityService {
         return pkg != null && (pkg.toString().equals("com.whatsapp") || pkg.toString().equals("com.whatsapp.w4b"));
     }
 
+    private void metrics() {
+        DisplayMetrics dm = new DisplayMetrics();
+        wm.getDefaultDisplay().getRealMetrics(dm);
+        W = dm.widthPixels;
+        H = dm.heightPixels;
+    }
+
     // ---------- Boucle principale ----------
 
     private void update() {
         AccessibilityNodeInfo active = getRootInActiveWindow();
         if (active == null) {
-            if (phase != 0) schedule(300);
+            if (phase != 0) schedule(200);
             return;
         }
         String pkg = String.valueOf(active.getPackageName());
-        SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
-        int color = parseColor(p);
 
         if (!isWa(pkg)) {
-            showMasks(new HashMap<>(), color);
+            showMasks(new HashMap<>(), 0);
             if (!pkg.equals("com.android.systemui")) {
                 inWhatsApp = false;
                 phase = 0;
@@ -168,171 +226,205 @@ public class MaskService extends AccessibilityService {
         if (!inWhatsApp || forceMacro) {
             inWhatsApp = true;
             forceMacro = false;
-            String saved = p.getString("liste", "").trim();
+            String saved = prefs.getString("liste", "").trim();
             boolean wantMacro = !saved.isEmpty()
-                    && (p.getBoolean("slide", true) || p.getBoolean("click", true));
+                    && (prefs.getBoolean("slide", true) || prefs.getBoolean("click", true));
             if (saved.isEmpty()) log("WhatsApp ouvert : aucune liste enregistrée, macro désactivée");
             else if (!wantMacro) log("WhatsApp ouvert : les 2 cases de la macro sont décochées");
             if (wantMacro) {
                 startMacro(now, true);
-                log("WhatsApp ouvert : macro démarrée pour « " + saved + " »");
+                log("WhatsApp ouvert : macro pour « " + saved + " »");
             }
         }
 
-        DisplayMetrics dm = new DisplayMetrics();
-        wm.getDefaultDisplay().getRealMetrics(dm);
-        int W = dm.widthPixels, H = dm.heightPixels;
+        metrics();
+        Scan sc = scan(now);
 
-        // Toutes les fenêtres de WhatsApp : l'écran principal + menus/popups éventuels
-        List<Item> items = null;
-        String mainPkg = pkg;
-        List<Rect> popups = new ArrayList<>();
-        boolean smallWindows = true;
-        for (AccessibilityWindowInfo w : getWindows()) {
+        if (!sc.home) {
+            learnClass(now, false, sc);
+            if (!sc.bigOther && !sc.popups.isEmpty() && now - lastHomeTime < 60000) {
+                // Menu ouvert par-dessus l'écran principal : on garde les caches
+                showMasks(withoutPopups(lastWant, sc.popups), maskColor());
+            } else {
+                showMasks(new HashMap<>(), 0);
+            }
+            if (phase != 0) runMacro(false, new ArrayList<>(), new ArrayList<>(), now);
+            return;
+        }
+
+        lastHomeTime = now;
+        learnClass(now, true, sc);
+
+        if (now - lastDumpTime > 10000) {
+            lastDumpTime = now;
+            List<Item> all = new ArrayList<>();
+            collect(sc.homeRoot, 0, all, 1500);
+            lastDump = dump(all, sc.homePkg);
+        }
+
+        Map<String, Rect> want = withoutPopups(sc.want, sc.popups);
+        if (sc.popups.isEmpty()) {
+            lastWant = new HashMap<>(want);
+            saveCache(want);
+        }
+        showMasks(want, maskColor());
+
+        List<Chip> chips = findChips(sc.chipItems);
+        if (phase != 0) {
+            runMacro(true, chips, sc.chipItems, now);
+        } else if (prefs.getBoolean("slide", true) && sc.popups.isEmpty()) {
+            watchdog(chips, sc.chipItems, now);
+        }
+    }
+
+    private Map<String, Rect> withoutPopups(Map<String, Rect> in, List<Rect> popups) {
+        Map<String, Rect> out = new HashMap<>();
+        for (Map.Entry<String, Rect> e : in.entrySet()) {
+            boolean hit = false;
+            for (Rect pop : popups) if (Rect.intersects(e.getValue(), pop)) hit = true;
+            if (!hit) out.put(e.getKey(), e.getValue());
+        }
+        return out;
+    }
+
+    // ---------- Analyse de l'écran ----------
+
+    private Scan scan(long now) {
+        Scan sc = new Scan();
+        List<AccessibilityWindowInfo> windows = getWindows();
+        for (AccessibilityWindowInfo w : windows) {
             if (w.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) continue;
             AccessibilityNodeInfo root = w.getRoot();
             if (root == null || !isWa(root.getPackageName())) continue;
+            String wp = String.valueOf(root.getPackageName());
+
+            if (!sc.home) {
+                boolean ok = fastBroken ? fullHome(root, sc) : fastHome(root, wp, sc);
+                if (ok) {
+                    sc.home = true;
+                    sc.homeRoot = root;
+                    sc.homePkg = wp;
+                    continue;
+                }
+            }
+            // Autre fenêtre : menu, boîte de dialogue ou autre écran
             List<Item> list = new ArrayList<>();
-            collect(root, 0, list);
-            if (items == null && isHome(list, H)) {
-                items = list;
-                mainPkg = String.valueOf(root.getPackageName());
-            } else {
-                // Partie visible du menu : ses lignes de texte (le fond invisible plein écran est ignoré)
-                Rect b = null;
-                for (Item it : list) {
-                    if (!it.visible || it.r.isEmpty() || it.text.isEmpty()) continue;
-                    Rect r = target(it.node, W);
-                    if (r.width() > W * 0.95 || r.height() > H * 0.5) r = new Rect(it.r);
-                    if (b == null) b = new Rect(r); else b.union(r);
-                }
-                smallWindows = smallWindows && list.size() < 80;
-                if (b != null) popups.add(b);
+            collect(root, 0, list, 90);
+            if (list.size() >= 90) sc.bigOther = true;
+            Rect b = null;
+            for (Item it : list) {
+                if (!it.visible || it.r.isEmpty() || it.text.isEmpty()) continue;
+                Rect r = bounds(clickableNode(it.node));
+                if (r.width() > W * 0.95 || r.height() > H * 0.5) r = new Rect(it.r);
+                if (b == null) b = new Rect(r); else b.union(r);
             }
-        }
-        if (items == null) {
-            if (smallWindows && !popups.isEmpty() && now - lastHomeTime < 60000) {
-                // Un menu est ouvert par-dessus l'écran principal : on garde les caches
-                Map<String, Rect> keep = new HashMap<>();
-                for (Map.Entry<String, Rect> e : lastWant.entrySet()) {
-                    boolean hit = false;
-                    for (Rect pop : popups) if (Rect.intersects(e.getValue(), pop)) hit = true;
-                    if (!hit) keep.put(e.getKey(), e.getValue());
-                }
-                log("Menu ouvert (écran principal masqué par Android) : caches conservés " + keep.keySet());
-                showMasks(keep, p.getBoolean("debug", false) ? COLOR_TEST : color);
-                return;
-            }
-            // Pas sur l'écran principal (dans une discussion, réglages…)
-            showMasks(new HashMap<>(), color);
-            if (phase != 0) runMacro(false, new ArrayList<>(), items, p, now, W);
-            return;
-        }
-        lastHomeTime = now;
-        if (!popups.isEmpty()) log("Menu ouvert, zone " + popups.get(0).toShortString());
-
-        if (now - lastDumpTime > 1500) {
-            lastDumpTime = now;
-            lastDump = dump(items, mainPkg);
+            if (b != null) sc.popups.add(b);
         }
 
-        // ----- Masques -----
-        boolean selectionMode = false;
+        // Sécurité : si une mise à jour de WhatsApp a changé ses identifiants,
+        // on repasse en analyse complète (plus lente mais fiable)
+        if (!sc.home && !fastBroken && now - lastFullCheck > 5000) {
+            lastFullCheck = now;
+            for (AccessibilityWindowInfo w : windows) {
+                if (w.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) continue;
+                AccessibilityNodeInfo root = w.getRoot();
+                if (root == null || !isWa(root.getPackageName())) continue;
+                List<Item> list = new ArrayList<>();
+                collect(root, 0, list, 700);
+                if (isHome(list)) {
+                    fastBroken = true;
+                    log("Identifiants WhatsApp inconnus : passage en analyse complète");
+                    schedule(30);
+                    break;
+                }
+            }
+        }
+        return sc;
+    }
+
+    // Analyse rapide : quelques requêtes ciblées au lieu de parcourir tout l'écran
+    private boolean fastHome(AccessibilityNodeInfo root, String wp, Scan sc) {
+        String px = wp + ":id/";
+        List<AccessibilityNodeInfo> nav = root.findAccessibilityNodeInfosByViewId(px + "bottom_nav");
+        if (nav == null || nav.isEmpty() || !nav.get(0).isVisibleToUser()) return false;
+
+        boolean disc = false, calls = false;
+        Map<String, Rect> tabs = new HashMap<>();
+        for (String id : new String[]{"navigation_bar_item_small_label_view", "navigation_bar_item_large_label_view"}) {
+            for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByViewId(px + id)) {
+                String t = norm(n.getText() == null ? "" : n.getText().toString());
+                if (t.equals("discussions")) disc = true;
+                else if (t.equals("appels")) { calls = true; if (n.isSelected()) sc.callsSelected = true; }
+                else if (t.equals("actus")) tabs.put("actus", bounds(clickableNode(n)));
+                else if (t.startsWith("communaut")) tabs.put("commu", bounds(clickableNode(n)));
+            }
+        }
+        if (!disc || !calls) return false;
+        if (prefs.getBoolean("actus", true) && tabs.containsKey("actus")) sc.want.put("actus", tabs.get("actus"));
+        if (prefs.getBoolean("commu", true) && tabs.containsKey("commu")) sc.want.put("commu", tabs.get("commu"));
+
+        for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByText("Archiver")) {
+            if (n.isVisibleToUser() && bounds(n).centerY() < H * 0.15) sc.selectionMode = true;
+        }
+        if (prefs.getBoolean("cam", true) && !sc.selectionMode) {
+            for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByViewId(px + "menuitem_camera")) {
+                if (n.isVisibleToUser()) sc.want.put("cam", bounds(n));
+            }
+        }
+        if (prefs.getBoolean("metaai", true) && !sc.callsSelected) {
+            for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByViewId(px + "extended_mini_fab")) {
+                Rect r = bounds(n);
+                if (n.isVisibleToUser() && r.width() < W * 0.4) sc.want.put("metaai", r);
+            }
+        }
+
+        for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByViewId(
+                px + "conversations_swipe_to_reveal_filter_recycler_view")) {
+            if (n.isVisibleToUser()) sc.chipItems.add(makeItem(n, 0));
+        }
+        if (!sc.chipItems.isEmpty()) {
+            for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByText("Filtre")) {
+                sc.chipItems.add(makeItem(n, 1));
+            }
+        }
+        return true;
+    }
+
+    // Analyse complète (secours)
+    private boolean fullHome(AccessibilityNodeInfo root, Scan sc) {
+        List<Item> items = new ArrayList<>();
+        collect(root, 0, items, 1500);
+        if (!isHome(items)) return false;
+
         for (Item it : items) {
             if (it.visible && it.r.centerY() < H * 0.15
                     && (has(it, "archiv") || starts(it, "Épingl") || starts(it, "Supprimer"))) {
-                selectionMode = true;
+                sc.selectionMode = true;
             }
+            if (it.r.centerY() > H * 0.8 && is(it, "Appels") && it.node.isSelected()) sc.callsSelected = true;
         }
-
-        Map<String, Rect> want = new HashMap<>();
         for (Item it : items) {
             if (!it.visible) continue;
             int cy = it.r.centerY();
-            if (p.getBoolean("cam", true) && !selectionMode && cy < H * 0.15
+            if (prefs.getBoolean("cam", true) && !sc.selectionMode && cy < H * 0.15
                     && (it.id.endsWith("menuitem_camera") || is(it, "Caméra", "Appareil photo"))) {
-                want.put("cam", new Rect(it.r));
-            } else if (p.getBoolean("metaai", true) && cy > H * 0.4 && it.r.width() < W * 0.4
+                sc.want.put("cam", new Rect(it.r));
+            } else if (prefs.getBoolean("metaai", true) && !sc.callsSelected && cy > H * 0.4
+                    && it.r.width() < W * 0.4
                     && (it.id.endsWith("extended_mini_fab") || has(it, "message à l'ia") || has(it, "meta ai"))
                     && !it.node.isEditable()) {
-                if (!want.containsKey("metaai")) want.put("metaai", target(it.node, W));
-            } else if (p.getBoolean("actus", true) && cy > H * 0.8 && is(it, "Actus")) {
-                want.put("actus", target(it.node, W));
-            } else if (p.getBoolean("commu", true) && cy > H * 0.8 && starts(it, "Communaut")) {
-                want.put("commu", target(it.node, W));
+                if (!sc.want.containsKey("metaai")) sc.want.put("metaai", bounds(clickableNode(it.node)));
+            } else if (prefs.getBoolean("actus", true) && cy > H * 0.8 && is(it, "Actus")) {
+                sc.want.put("actus", bounds(clickableNode(it.node)));
+            } else if (prefs.getBoolean("commu", true) && cy > H * 0.8 && starts(it, "Communaut")) {
+                sc.want.put("commu", bounds(clickableNode(it.node)));
             }
         }
-        // Ne jamais recouvrir un menu ouvert (⋮, appui long…)
-        for (String k : KEYS) {
-            Rect r = want.get(k);
-            if (r == null) continue;
-            for (Rect pop : popups) if (Rect.intersects(r, pop)) { want.remove(k); break; }
-        }
-        if (popups.isEmpty()) lastWant = new HashMap<>(want);
-        showMasks(want, p.getBoolean("debug", false) ? COLOR_TEST : color);
-
-        // ----- Macro -----
-        List<Chip> chips = findChips(items, H);
-        if (phase != 0) {
-            runMacro(true, chips, items, p, now, W);
-        } else if (p.getBoolean("slide", true) && popups.isEmpty()) {
-            watchdog(chips, items, p, now, W);
-        }
+        sc.chipItems = items;
+        return true;
     }
 
-    private void startMacro(long now, boolean withClick) {
-        phase = 1;
-        clickAfter = withClick;
-        phaseDeadline = now + 10000;
-        waitUntil = now + 250;
-        swipeTries = 0;
-        lastD = Integer.MIN_VALUE;
-        calibName = null;
-    }
-
-    // Toutes les 2 s : si la barre est partie trop à gauche, on la remet en place
-    private void watchdog(List<Chip> chips, List<Item> items, SharedPreferences p, long now, int W) {
-        String wanted = norm(p.getString("liste", ""));
-        if (wanted.isEmpty() || chips.isEmpty() || gestureBusy) { misalignedSince = 0; return; }
-        Chip goal = findGoal(chips, wanted);
-        boolean tooLeft;
-        if (goal == null) {
-            boolean toutesVisible = false;
-            for (Chip c : chips) if (norm(c.name).startsWith("toutes")) toutesVisible = true;
-            tooLeft = !toutesVisible;
-        } else {
-            tooLeft = goal.r.left < targetLeft(chips, items) - dp(4);
-        }
-        if (!tooLeft) { misalignedSince = 0; return; }
-        if (misalignedSince == 0) misalignedSince = now;
-        if (now - misalignedSince >= 2000) {
-            misalignedSince = 0;
-            log("Barre décalée trop à gauche depuis 2 s : recalage");
-            startMacro(now, false);
-            waitUntil = now;
-        }
-        schedule(400);
-    }
-
-    private Chip findGoal(List<Chip> chips, String wanted) {
-        for (Chip c : chips) if (norm(c.name).startsWith(wanted)) return c;
-        return null;
-    }
-
-    // Position voulue : juste assez à gauche pour que la liste précédente soit entièrement cachée
-    private int targetLeft(List<Chip> chips, List<Item> items) {
-        int barLeft = 0;
-        for (Item it : items) if (it.id.endsWith("filter_recycler_view")) { barLeft = it.r.left; break; }
-        int gap = Integer.MAX_VALUE;
-        for (int i = 0; i + 1 < chips.size(); i++) {
-            int g = chips.get(i + 1).r.left - chips.get(i).r.right;
-            if (g > 0 && g < gap) gap = g;
-        }
-        if (gap == Integer.MAX_VALUE) gap = dp(7);
-        return barLeft + gap + 2;
-    }
-
-    private boolean isHome(List<Item> items, int H) {
+    private boolean isHome(List<Item> items) {
         boolean disc = false, calls = false;
         for (Item it : items) {
             if (it.r.centerY() > H * 0.8) {
@@ -343,16 +435,42 @@ public class MaskService extends AccessibilityService {
         return disc && calls;
     }
 
-    private void runMacro(boolean home, List<Chip> chips, List<Item> items, SharedPreferences p,
-                          long now, int W) {
+    // Retient si un écran de WhatsApp (activité) est l'écran principal ou non
+    private void learnClass(long now, boolean home, Scan sc) {
+        if (pendingClass == null) return;
+        long age = now - pendingClassTime;
+        if (age < 300) return;
+        if (age > 4000) { pendingClass = null; return; }
+        if (!home && !sc.bigOther) return; // pas encore sûr
+        String key = "cls:" + pendingClass;
+        int score = prefs.getInt(key, 0);
+        score = home ? Math.min(5, score + 1) : Math.max(-5, score - 1);
+        prefs.edit().putInt(key, score).apply();
+        pendingClass = null;
+    }
+
+    // ---------- Macro ----------
+
+    private void startMacro(long now, boolean withClick) {
+        phase = 1;
+        clickAfter = withClick;
+        clicked = false;
+        phaseDeadline = now + 10000;
+        waitUntil = now;
+        swipeTries = 0;
+        lastD = Integer.MIN_VALUE;
+        calibName = null;
+    }
+
+    private void runMacro(boolean home, List<Chip> chips, List<Item> items, long now) {
         if (now > phaseDeadline) {
-            log("Macro abandonnée : délai dépassé (étape " + phase + ")");
+            log("Macro abandonnée : délai dépassé");
             phase = 0;
             return;
         }
-        schedule(120);
+        schedule(60);
 
-        if (!home) { log("En attente de l'écran principal…"); return; }
+        if (!home) return;
         if (now < waitUntil) return;
         if (gestureBusy) {
             if (now - gestureStart < 3000) return;
@@ -360,20 +478,18 @@ public class MaskService extends AccessibilityService {
         }
         if (chips.isEmpty()) { log("Barre des listes introuvable"); return; }
 
-        String wanted = norm(p.getString("liste", ""));
-        boolean slide = p.getBoolean("slide", true);
+        String wanted = norm(prefs.getString("liste", ""));
+        boolean slide = prefs.getBoolean("slide", true);
         Chip goal = findGoal(chips, wanted);
 
         if (goal == null) {
             calibName = null;
             if (swipeTries < 6) {
                 swipeTries++;
-                boolean toutesVisible = false;
-                for (Chip c : chips) if (norm(c.name).startsWith("toutes")) toutesVisible = true;
-                int dir = toutesVisible ? 1 : -1;   // liste à droite si Toutes est visible, sinon à gauche
-                log("« " + wanted + " » pas visible, défilement " + (dir > 0 ? "→" : "←") + " — " + describe(chips));
+                int dir = toutesVisible(chips) ? 1 : -1;
+                log("« " + wanted + " » pas visible, défilement — " + describe(chips));
                 swipe(chips.get(0).r.centerY(), dir * W / 2, false);
-                waitUntil = now + 100;
+                waitUntil = now;
             } else {
                 log("« " + wanted + " » introuvable — " + describe(chips));
                 phase = 0;
@@ -381,57 +497,93 @@ public class MaskService extends AccessibilityService {
             return;
         }
 
+        // Clic immédiat : la liste s'affiche sans attendre le glissement
+        if (phase == 1 && clickAfter && !clicked && prefs.getBoolean("click", true)) {
+            clicked = true;
+            if (goal.selected) log("Déjà sélectionnée : " + goal.name);
+            else click(goal);
+            if (gestureBusy) return;
+        }
+
         // Apprentissage : compare le déplacement demandé au déplacement réel
         if (calibName != null && calibName.equals(goal.name) && calibLeft != Integer.MIN_VALUE) {
             int moved = calibLeft - goal.r.left;
             if (moved != 0 && Integer.signum(moved) == Integer.signum(calibReq)) {
                 int err = Math.abs(calibReq) - Math.abs(moved);
-                int calib = p.getInt("calib", 0);
-                int next = Math.max(-dp(40), Math.min(dp(80), calib + err * 7 / 10));
-                p.edit().putInt("calib", next).apply();
+                int calib = prefs.getInt("calib", 0);
+                int next = Math.max(-dp(40), Math.min(dp(80), calib + err * 8 / 10));
+                prefs.edit().putInt("calib", next).apply();
             }
             calibName = null;
         }
 
-        int d = goal.r.left - targetLeft(chips, items);   // > 0 : trop à droite, < 0 : trop à gauche
-        boolean stuck = lastD != Integer.MIN_VALUE && Math.abs(d - lastD) < dp(3);
+        int base = targetBase(chips, items);        // au-delà : la liste précédente dépasse
+        boolean ok = goal.r.left <= base && goal.r.left >= base - dp(8);
+        int d = goal.r.left - (base - dp(3));      // on vise un peu à gauche de la limite
+        boolean stuck = lastD != Integer.MIN_VALUE && Math.abs(d - lastD) < dp(2);
+        int maxTries = phase == 1 ? 5 : 3;
 
-        if (phase == 1 || phase == 3) {
-            int maxTries = phase == 1 ? 6 : 8;
-            if (slide && Math.abs(d) > dp(4) && swipeTries < maxTries && !stuck) {
-                swipeTries++;
-                lastD = d;
-                calibName = goal.name;
-                calibLeft = goal.r.left;
-                calibReq = d;
-                log("Placement de « " + goal.name + " » : décalage " + d + " px — " + describe(chips));
-                swipe(goal.r.centerY(), d, true);
-                waitUntil = now + 100;
+        if (slide && !ok && swipeTries < maxTries && !stuck) {
+            swipeTries++;
+            lastD = d;
+            calibName = goal.name;
+            calibLeft = goal.r.left;
+            calibReq = d;
+            log("Placement de « " + goal.name + " » : " + d + " px (correction apprise "
+                    + prefs.getInt("calib", 0) + ")");
+            swipe(goal.r.centerY(), d, true);
+            waitUntil = now;
+        } else {
+            if (stuck) log("La barre ne peut pas aller plus loin");
+            lastD = Integer.MIN_VALUE;
+            if (phase == 1) {
+                phase = 3;
+                swipeTries = 0;
+                waitUntil = now + 250;
             } else {
-                if (stuck) log("La barre ne peut pas aller plus loin — " + describe(chips));
-                lastD = Integer.MIN_VALUE;
-                if (phase == 1 && clickAfter) {
-                    phase = 2;
-                } else {
-                    log("Macro terminée — " + describe(chips));
-                    phase = 0;
-                }
+                log("Macro terminée — " + describe(chips));
+                phase = 0;
             }
-
-        } else if (phase == 2) {
-            if (p.getBoolean("click", true)) {
-                if (goal.selected) log("Déjà sélectionnée : " + goal.name);
-                else click(goal);
-                waitUntil = now + 350;
-            }
-            phase = 3;
         }
+    }
+
+    // Si la barre reste 2 s plus à droite que la position de base, on la remet en place
+    private void watchdog(List<Chip> chips, List<Item> items, long now) {
+        String wanted = norm(prefs.getString("liste", ""));
+        if (wanted.isEmpty() || chips.isEmpty() || gestureBusy) { misalignedSince = 0; return; }
+        Chip goal = findGoal(chips, wanted);
+        boolean tooRight;
+        int pos;
+        if (goal == null) {
+            tooRight = toutesVisible(chips);
+            pos = chips.get(0).r.left;
+        } else {
+            tooRight = goal.r.left > targetBase(chips, items) + dp(2);
+            pos = goal.r.left;
+        }
+        if (!tooRight) {
+            misalignedSince = 0;
+            watchPos = Integer.MIN_VALUE;
+            return;
+        }
+        if (Math.abs(pos - watchPos) > dp(2)) {   // la barre bouge encore : on attend qu'elle s'arrête
+            watchPos = pos;
+            misalignedSince = now;
+        }
+        if (now - misalignedSince >= 2000) {
+            misalignedSince = 0;
+            watchPos = Integer.MIN_VALUE;
+            log("Retour à la position de base");
+            startMacro(now, false);
+            return;
+        }
+        schedule(250);
     }
 
     // ---------- Barre des listes ----------
     // WhatsApp les décrit ainsi : RadioButton [Filtre POTO'S, ‎1, désélectionné]
 
-    private List<Chip> findChips(List<Item> items, int H) {
+    private List<Chip> findChips(List<Item> items) {
         List<Chip> chips = new ArrayList<>();
         for (Item it : items) {
             String d = it.desc.replace("\u200E", "").trim();
@@ -446,10 +598,35 @@ public class MaskService extends AccessibilityService {
                     || (state.endsWith("sélectionné") && !state.endsWith("désélectionné"));
             c.r = new Rect(it.r);
             c.node = it.node;
-            chips.add(c);
+            boolean dup = false;
+            for (Chip e : chips) if (e.r.equals(c.r)) dup = true;
+            if (!dup) chips.add(c);
         }
         chips.sort((a, b) -> Integer.compare(a.r.left, b.r.left));
         return chips;
+    }
+
+    private Chip findGoal(List<Chip> chips, String wanted) {
+        for (Chip c : chips) if (norm(c.name).startsWith(wanted)) return c;
+        return null;
+    }
+
+    private boolean toutesVisible(List<Chip> chips) {
+        for (Chip c : chips) if (norm(c.name).startsWith("toutes")) return true;
+        return false;
+    }
+
+    // Position limite : bord de la barre + écart entre deux listes
+    private int targetBase(List<Chip> chips, List<Item> items) {
+        int barLeft = 0;
+        for (Item it : items) if (it.id.endsWith("filter_recycler_view")) { barLeft = it.r.left; break; }
+        int gap = Integer.MAX_VALUE;
+        for (int i = 0; i + 1 < chips.size(); i++) {
+            int g = chips.get(i + 1).r.left - chips.get(i).r.right;
+            if (g > 0 && g < gap) gap = g;
+        }
+        if (gap == Integer.MAX_VALUE) gap = dp(7);
+        return barLeft + gap;
     }
 
     private String describe(List<Chip> chips) {
@@ -472,7 +649,7 @@ public class MaskService extends AccessibilityService {
         Path path = new Path();
         path.moveTo(c.r.centerX(), c.r.centerY());
         GestureDescription g = new GestureDescription.Builder()
-                .addStroke(new GestureDescription.StrokeDescription(path, 0, 60)).build();
+                .addStroke(new GestureDescription.StrokeDescription(path, 0, 50)).build();
         startGesture();
         boolean ok = dispatchGesture(g, callback("Appui"), null);
         if (!ok) gestureBusy = false;
@@ -480,14 +657,11 @@ public class MaskService extends AccessibilityService {
     }
 
     // dist > 0 : contenu vers la gauche, dist < 0 : vers la droite.
-    // Mouvement lent puis doigt immobile avant de relâcher (pas d'effet "lancer"),
-    // et loin des bords de l'écran (geste retour d'Android).
+    // Mouvement rapide puis doigt immobile avant de relâcher (pas d'effet "lancer"),
+    // loin des bords de l'écran (geste retour d'Android).
     private void swipe(int y, int dist, boolean precise) {
-        DisplayMetrics dm = new DisplayMetrics();
-        wm.getDefaultDisplay().getRealMetrics(dm);
-        int W = dm.widthPixels;
         int slop = ViewConfiguration.get(this).getScaledTouchSlop();
-        if (precise) slop += getSharedPreferences(PREFS, MODE_PRIVATE).getInt("calib", 0);
+        if (precise) slop += prefs.getInt("calib", 0);
         int x0, x1;
         if (dist > 0) {
             x0 = (int) (W * 0.85);
@@ -502,11 +676,11 @@ public class MaskService extends AccessibilityService {
         move.moveTo(x0, y);
         move.lineTo(x1, y);
         GestureDescription.StrokeDescription s1 =
-                new GestureDescription.StrokeDescription(move, 0, 220, true);
+                new GestureDescription.StrokeDescription(move, 0, 200, true);
         Path hold = new Path();
         hold.moveTo(x1, y);
         hold.lineTo(x1 + step, y);
-        GestureDescription.StrokeDescription s2 = s1.continueStroke(hold, 0, 130, false);
+        GestureDescription.StrokeDescription s2 = s1.continueStroke(hold, 0, 110, false);
 
         startGesture();
         boolean ok = dispatchGesture(new GestureDescription.Builder().addStroke(s1).build(),
@@ -536,7 +710,7 @@ public class MaskService extends AccessibilityService {
 
     private GestureResultCallback callback(String name) {
         return new GestureResultCallback() {
-            @Override public void onCompleted(GestureDescription g) { gestureBusy = false; schedule(60); }
+            @Override public void onCompleted(GestureDescription g) { gestureBusy = false; schedule(40); }
             @Override public void onCancelled(GestureDescription g) {
                 gestureBusy = false;
                 log(name + " annulé par Android");
@@ -545,9 +719,51 @@ public class MaskService extends AccessibilityService {
     }
 
     // ---------- Masques ----------
-    // Une fenêtre fixe par élément : jamais supprimée ni déplacée vers un autre élément,
-    // juste cachée/affichée sur place, sans animation.
 
+    private int maskColor() {
+        if (prefs.getBoolean("debug", false)) return COLOR_TEST;
+        try {
+            return Color.parseColor(prefs.getString("color", DEFAULT_COLOR).trim());
+        } catch (Exception e) {
+            return Color.parseColor(DEFAULT_COLOR);
+        }
+    }
+
+    private String cacheKey() {
+        return "cache:" + W + "x" + H;
+    }
+
+    private void saveCache(Map<String, Rect> want) {
+        StringBuilder sb = new StringBuilder();
+        for (String k : KEYS) {
+            Rect r = want.get(k);
+            if (r == null) continue;
+            sb.append(k).append(':').append(r.left).append(',').append(r.top).append(',')
+                    .append(r.right).append(',').append(r.bottom).append(';');
+        }
+        String str = sb.toString();
+        if (!str.equals(savedCacheStr)) {
+            savedCacheStr = str;
+            prefs.edit().putString(cacheKey(), str).apply();
+        }
+    }
+
+    private Map<String, Rect> loadCache() {
+        Map<String, Rect> m = new HashMap<>();
+        for (String part : prefs.getString(cacheKey(), "").split(";")) {
+            String[] kv = part.split(":");
+            if (kv.length != 2 || !prefs.getBoolean(kv[0], true)) continue;
+            String[] n = kv[1].split(",");
+            if (n.length != 4) continue;
+            try {
+                m.put(kv[0], new Rect(Integer.parseInt(n[0]), Integer.parseInt(n[1]),
+                        Integer.parseInt(n[2]), Integer.parseInt(n[3])));
+            } catch (NumberFormatException ignored) { }
+        }
+        return m;
+    }
+
+    // Une fenêtre fixe par élément, cachée/affichée sur place, sans animation
     private void showMasks(Map<String, Rect> want, int color) {
         if (wm == null) return;
         int m = dp(2);
@@ -592,16 +808,18 @@ public class MaskService extends AccessibilityService {
             if (changed) {
                 try { wm.updateViewLayout(v, lp); } catch (Exception ignored) { }
             }
-            if (v.getVisibility() != View.VISIBLE) {
-                final View fv = v;
-                v.post(() -> fv.setVisibility(View.VISIBLE));
-            }
+            if (v.getVisibility() != View.VISIBLE) v.setVisibility(View.VISIBLE);
         }
     }
 
+    private final Map<String, Integer> painted = new HashMap<>();
+
     private void paint(View v, String key, int color) {
+        Integer prev = painted.get(key);
+        if (prev != null && prev == color) return;
+        painted.put(key, color);
         if (key.equals("metaai")) {
-            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            GradientDrawable bg = new GradientDrawable();
             bg.setColor(color);
             bg.setCornerRadius(dp(18));
             v.setBackground(bg);
@@ -630,18 +848,9 @@ public class MaskService extends AccessibilityService {
         return lp;
     }
 
-    private int parseColor(SharedPreferences p) {
-        try {
-            return Color.parseColor(p.getString("color", DEFAULT_COLOR).trim());
-        } catch (Exception e) {
-            return Color.parseColor(DEFAULT_COLOR);
-        }
-    }
-
     // ---------- Outils ----------
 
-    private void collect(AccessibilityNodeInfo n, int depth, List<Item> out) {
-        if (n == null || depth > 45 || out.size() > 1500) return;
+    private Item makeItem(AccessibilityNodeInfo n, int depth) {
         Item it = new Item();
         it.node = n;
         it.depth = depth;
@@ -652,18 +861,21 @@ public class MaskService extends AccessibilityService {
         it.cls = cls.substring(cls.lastIndexOf('.') + 1);
         it.visible = n.isVisibleToUser();
         n.getBoundsInScreen(it.r);
-        out.add(it);
-        int count = n.getChildCount();
-        for (int i = 0; i < count; i++) collect(n.getChild(i), depth + 1, out);
+        return it;
     }
 
-    private AccessibilityNodeInfo clickableNode(AccessibilityNodeInfo n, int W) {
+    private void collect(AccessibilityNodeInfo n, int depth, List<Item> out, int max) {
+        if (n == null || depth > 45 || out.size() >= max) return;
+        out.add(makeItem(n, depth));
+        int count = n.getChildCount();
+        for (int i = 0; i < count && out.size() < max; i++) collect(n.getChild(i), depth + 1, out, max);
+    }
+
+    private AccessibilityNodeInfo clickableNode(AccessibilityNodeInfo n) {
         AccessibilityNodeInfo cur = n;
         for (int i = 0; i < 4 && cur != null; i++) {
             if (cur.isClickable()) {
-                Rect r = new Rect();
-                cur.getBoundsInScreen(r);
-                if (r.width() < W * 0.6) return cur;
+                if (bounds(cur).width() < W * 0.6) return cur;
                 break;
             }
             cur = cur.getParent();
@@ -671,9 +883,9 @@ public class MaskService extends AccessibilityService {
         return n;
     }
 
-    private Rect target(AccessibilityNodeInfo n, int W) {
+    private static Rect bounds(AccessibilityNodeInfo n) {
         Rect r = new Rect();
-        clickableNode(n, W).getBoundsInScreen(r);
+        n.getBoundsInScreen(r);
         return r;
     }
 

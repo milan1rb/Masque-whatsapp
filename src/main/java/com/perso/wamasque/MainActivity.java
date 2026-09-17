@@ -115,6 +115,29 @@ public class MainActivity extends Activity {
         check(root, "slide", "Placer cette liste tout à gauche", true);
         check(root, "click", "Cliquer dessus", true);
 
+        title(root, "Apprentissage");
+        TextView learn = new TextView(this);
+        root.addView(learn);
+        Runnable refreshLearn = () -> {
+            int screens = 0;
+            for (String k : prefs.getAll().keySet()) if (k.startsWith("cls:")) screens++;
+            learn.setText("Écrans WhatsApp connus : " + screens
+                    + "\nCorrection apprise du glissement : " + prefs.getInt("calib", 0) + " px");
+        };
+        refreshLearn.run();
+        Button reset = new Button(this);
+        reset.setText("Réinitialiser l'apprentissage");
+        reset.setOnClickListener(v -> {
+            SharedPreferences.Editor ed = prefs.edit();
+            for (String k : prefs.getAll().keySet()) {
+                if (k.startsWith("cls:") || k.startsWith("cache:") || k.equals("calib")) ed.remove(k);
+            }
+            ed.apply();
+            refreshLearn.run();
+            Toast.makeText(this, "Apprentissage effacé", Toast.LENGTH_SHORT).show();
+        });
+        root.addView(reset);
+
         title(root, "Diagnostic");
         Button show = new Button(this);
         show.setText("Afficher les éléments détectés");
