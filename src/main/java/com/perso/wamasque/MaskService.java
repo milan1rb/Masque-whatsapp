@@ -84,6 +84,7 @@ public class MaskService extends AccessibilityService {
     private String calibName = null;
     private boolean fastBroken = false;
     private long lastFullCheck = 0;
+    private long lastChipScan = 0;
     // Apprentissage de la couleur exacte du fond
     private long lastShot = 0;
     private boolean shotBusy = false;
@@ -271,7 +272,6 @@ public class MaskService extends AccessibilityService {
 
         Map<String, Rect> want = withoutPopups(sc.want, sc.popups);
         if (sc.popups.isEmpty()) {
-            if (!want.equals(lastWant)) colorTries.clear();
             lastWant = new HashMap<>(want);
             saveCache(want);
         }
@@ -279,6 +279,17 @@ public class MaskService extends AccessibilityService {
         if (sc.popups.isEmpty()) learnColors(want, now);
 
         List<Chip> chips = findChips(sc.chipItems);
+        if (chips.isEmpty() && (phase != 0 || prefs.getBoolean("slide", true))
+                && now - lastChipScan > 1000) {
+            lastChipScan = now;
+            List<Item> all = new ArrayList<>();
+            collect(sc.homeRoot, 0, all, 900);
+            chips = findChips(all);
+            if (!chips.isEmpty()) {
+                sc.chipItems = all;
+                log("Barre des listes trouvée par analyse complète");
+            }
+        }
         if (phase != 0) {
             runMacro(true, chips, sc.chipItems, now);
         } else if (prefs.getBoolean("slide", true) && sc.popups.isEmpty()) {
@@ -389,12 +400,15 @@ public class MaskService extends AccessibilityService {
 
         for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByViewId(
                 px + "conversations_swipe_to_reveal_filter_recycler_view")) {
-            if (n.isVisibleToUser()) sc.chipItems.add(makeItem(n, 0));
-        }
-        if (!sc.chipItems.isEmpty()) {
-            for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByText("Filtre")) {
-                sc.chipItems.add(makeItem(n, 1));
+            if (!n.isVisibleToUser()) continue;
+            AccessibilityNodeInfo base = n;
+            for (int i = 0; i < 2; i++) {
+                AccessibilityNodeInfo up = base.getParent();
+                if (up == null) break;
+                base = up;
             }
+            collect(base, 0, sc.chipItems, 150);
+            break;
         }
         return true;
     }
@@ -746,14 +760,15 @@ public class MaskService extends AccessibilityService {
     // et corrige, jusqu'à ce que les deux soient identiques.
     private void learnColors(Map<String, Rect> want, long now) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
-        if (!prefs.getBoolean("autocolor", true) || prefs.getBoolean("debug", false)) return;
+        if (!prefs.getBoolean("calibcolor", false) || prefs.getBoolean("debug", false)) return;
         if (shotBusy || want.isEmpty() || now - lastShot < 1500) return;
         boolean todo = false;
         for (String k : want.keySet()) if (colorTries.getOrDefault(k, 0) < 8) todo = true;
-        if (!todo) return;
+        if (!todo) { finishColor("8 essais"); return; }
 
         lastShot = now;
         shotBusy = true;
+        log("Mesure de la couleur du fond…");
         final Map<String, Rect> snapshot = new HashMap<>(want);
         try {
             takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
@@ -849,7 +864,18 @@ public class MaskService extends AccessibilityService {
         if (changed) {
             ed.apply();
             schedule(30);
+        } else {
+            finishColor("couleur stable");
         }
+    }
+
+    private void finishColor(String why) {
+        if (!prefs.getBoolean("calibcolor", false)) return;
+        prefs.edit().putBoolean("calibcolor", false).apply();
+        colorTries.clear();
+        StringBuilder sb = new StringBuilder();
+        for (String k : KEYS) sb.append(k).append('=').append(String.format("#%06X", colorFor(k) & 0xFFFFFF)).append(' ');
+        log("Calibration couleur terminée (" + why + ") : " + sb);
     }
 
     private static int clamp(int v) {

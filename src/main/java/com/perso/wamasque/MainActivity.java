@@ -50,7 +50,6 @@ public class MainActivity extends Activity {
         check(root, "actus", "Onglet Actus", true);
         check(root, "commu", "Onglet Communautés", true);
         check(root, "debug", "Mode test : masques rouges transparents", false);
-        check(root, "autocolor", "Ajuster la couleur automatiquement (recommandé)", true);
 
         TextView colorLabel = new TextView(this);
         colorLabel.setText("Couleur des masques (code hexadécimal)");
@@ -61,6 +60,20 @@ public class MainActivity extends Activity {
         color.setHint(MaskService.DEFAULT_COLOR);
         color.setText(prefs.getString("color", MaskService.DEFAULT_COLOR));
         root.addView(color);
+        Button pipette = new Button(this);
+        pipette.setText("Pipette : calculer la couleur exacte");
+        pipette.setOnClickListener(v -> {
+            prefs.edit().putBoolean("calibcolor", true).apply();
+            Intent wa = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
+            if (wa == null) {
+                Toast.makeText(this, "WhatsApp introuvable", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            Toast.makeText(this, "Mesure en cours dans WhatsApp, reviens dans 5 s", Toast.LENGTH_LONG).show();
+            startActivity(wa);
+        });
+        root.addView(pipette);
+
         Button saveColor = new Button(this);
         saveColor.setText("Enregistrer la couleur");
         saveColor.setOnClickListener(v -> {
@@ -122,8 +135,16 @@ public class MainActivity extends Activity {
         Runnable refreshLearn = () -> {
             int screens = 0;
             for (String k : prefs.getAll().keySet()) if (k.startsWith("cls:")) screens++;
+            StringBuilder cols = new StringBuilder();
+            for (String k : new String[]{"cam", "metaai", "actus", "commu"}) {
+                if (prefs.contains("col:" + k)) {
+                    cols.append("\n  ").append(k).append(" : ")
+                        .append(String.format("#%06X", prefs.getInt("col:" + k, 0) & 0xFFFFFF));
+                }
+            }
             learn.setText("Écrans WhatsApp connus : " + screens
-                    + "\nCorrection apprise du glissement : " + prefs.getInt("calib", 0) + " px");
+                    + "\nCorrection apprise du glissement : " + prefs.getInt("calib", 0) + " px"
+                    + "\nCouleurs mesurées :" + (cols.length() == 0 ? " aucune" : cols));
         };
         refreshLearn.run();
         Button reset = new Button(this);
