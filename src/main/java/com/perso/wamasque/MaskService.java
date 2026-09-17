@@ -169,13 +169,13 @@ public class MaskService extends AccessibilityService {
             if (key != null) {
                 pendingClick = key;
                 pendingClickTime = t;
-                if (prefs.getBoolean("learn", true) && prefs.getInt("gon:" + key, 0) >= 2) {
+                if (prefs.getBoolean("learn", true) && prefs.getInt("gon:" + key, 0) >= 1) {
                     String cls = prefs.getString("go:" + key, "");
                     int score = prefs.getInt("cls:" + cls, 0);
-                    if (score >= 2 && imeBounds() == null) {
+                    if (score >= 1 && imeBounds() == null) {
                         metrics();
                         showMasks(loadCache(cls), 0);
-                    } else if (score <= -2) {
+                    } else if (score <= 0) {
                         showMasks(new HashMap<>(), 0);
                     }
                 }
@@ -202,17 +202,26 @@ public class MaskService extends AccessibilityService {
                     pendingClick = null;
                 }
                 int score = prefs.getInt("cls:" + cls, 0);
-                if (score >= 2 && imeBounds() == null) {
+                if (score >= 1 && imeBounds() == null) {
                     metrics();
                     showMasks(loadCache(cls), 0);
-                } else if (score <= -2) {
+                } else {
+                    // écran inconnu ou sans caches : on retire tout de suite,
+                    // quitte à les remettre 30 ms plus tard si c'est l'écran principal
                     showMasks(new HashMap<>(), 0);
                 }
             } else if (pk != null && pk.toString().equals(launcherPkg)) {
                 showMasks(new HashMap<>(), 0);
             }
         }
-        schedule(30);
+        int type = e.getEventType();
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+                || type == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            scheduleNow();
+        } else {
+            schedule(30);
+        }
     }
 
     private String clickKey(AccessibilityEvent e) {
@@ -228,6 +237,12 @@ public class MaskService extends AccessibilityService {
             scheduled = true;
             handler.postDelayed(tick, delay);
         }
+    }
+
+    private void scheduleNow() {
+        handler.removeCallbacks(tick);
+        scheduled = true;
+        handler.post(tick);
     }
 
     @Override
@@ -555,7 +570,7 @@ public class MaskService extends AccessibilityService {
     private void learnClass(long now, boolean home, Scan sc) {
         if (pendingClass == null) return;
         long age = now - pendingClassTime;
-        if (age < 300) return;
+        if (age < 120) return;
         if (age > 4000) { pendingClass = null; return; }
         if (!home && !sc.bigOther) return; // pas encore sûr
         String key = "cls:" + pendingClass;
