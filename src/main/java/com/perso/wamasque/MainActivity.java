@@ -51,13 +51,13 @@ public class MainActivity extends Activity {
         check(root, "commu", "Onglet Communautés", true);
         check(root, "debug", "Mode test : masques rouges transparents", false);
 
-        title(root, "Macros");
-        check(root, "slide", "Au lancement : ramener les listes au début (cacher « Toutes »)", true);
-        check(root, "autofirst", "Au lancement : ouvrir la 1re liste après « Toutes »", true);
-
-        title(root, "Liste précise à ouvrir (optionnel)");
+        title(root, "Macro au lancement de WhatsApp");
+        TextView help = new TextView(this);
+        help.setText("Écris le nom de la liste à mettre en premier (ex : Non lues, POTO'S). "
+                + "Laisse vide pour désactiver la macro.");
+        root.addView(help);
         EditText list = new EditText(this);
-        list.setHint("ex : POTO'S  (vide = 1re liste après Toutes)");
+        list.setHint("Nom de la liste");
         list.setSingleLine(true);
         list.setText(prefs.getString("liste", ""));
         root.addView(list);
@@ -68,6 +68,8 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "Enregistré", Toast.LENGTH_SHORT).show();
         });
         root.addView(save);
+        check(root, "slide", "Placer cette liste tout à gauche", true);
+        check(root, "click", "Cliquer dessus", true);
 
         title(root, "Diagnostic");
         Button show = new Button(this);

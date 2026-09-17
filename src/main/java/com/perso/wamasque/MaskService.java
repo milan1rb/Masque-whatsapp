@@ -147,8 +147,8 @@ public class MaskService extends AccessibilityService {
 
         if (!inWhatsApp) {
             inWhatsApp = true;
-            boolean wantMacro = p.getBoolean("slide", true) || p.getBoolean("autofirst", true)
-                    || !p.getString("liste", "").trim().isEmpty();
+            boolean wantMacro = !p.getString("liste", "").trim().isEmpty()
+                    && (p.getBoolean("slide", true) || p.getBoolean("click", true));
             if (wantMacro) {
                 phase = 1;
                 phaseDeadline = now + 10000;
@@ -185,7 +185,8 @@ public class MaskService extends AccessibilityService {
             lastDump = dump(items, pkg);
         }
 
-        List<Chip> chips = home ? findChips(items, W, H) : new ArrayList<>();
+        String wanted = norm(p.getString("liste", ""));
+        List<Chip> chips = home ? findChips(items, W, H, wanted) : new ArrayList<>();
 
         // ----- Masques -----
         List<Rect> rects = new ArrayList<>();
@@ -230,10 +231,11 @@ public class MaskService extends AccessibilityService {
         showRects(rects, p.getBoolean("debug", false) ? COLOR_TEST : COLOR_MASK);
 
         // ----- Macro de lancement -----
-        if (phase != 0) runMacro(home, chips, p, now);
+        if (phase != 0) runMacro(home, chips, wanted, p, now, W);
     }
 
-    private void runMacro(boolean home, List<Chip> chips, SharedPreferences p, long now) {
+    private void runMacro(boolean home, List<Chip> chips, String wanted, SharedPreferences p,
+                          long now, int W) {
         if (now > phaseDeadline) {
             log("Macro abandonnée : délai dépassé (étape " + phase + ")");
             phase = 0;
@@ -249,59 +251,59 @@ public class MaskService extends AccessibilityService {
         }
         if (chips.isEmpty()) { log("Barre des listes introuvable"); return; }
 
-        Chip first = firstAfterToutes(chips);
-        if (first == null) { log("Liste après Toutes introuvable : " + describe(chips)); return; }
-        int d = first.r.left - dp(16);
         boolean slide = p.getBoolean("slide", true);
+        Chip goal = null;
+        for (Chip c : chips) for (String l : c.labels) if (norm(l).startsWith(wanted)) goal = c;
 
-        if (phase == 1) {
-            if (slide && d > dp(12) && swipeTries < 4) {
+        if (goal == null) {
+            // Liste pas encore à l'écran : on fait défiler la barre vers la droite
+            if (swipeTries < 6) {
                 swipeTries++;
-                log("Glissement de " + d + " px, essai " + swipeTries + " — " + describe(chips));
-                swipeLeft(first.r.centerY(), d);
+                log("« " + wanted + " » pas visible, défilement — " + describe(chips));
+                swipe(chips.get(0).r.centerY(), W / 2);
                 waitUntil = now + 700;
             } else {
-                if (slide) log("Listes au début — " + describe(chips));
-                phase = 2;
+                log("« " + wanted + " » introuvable — " + describe(chips));
+                phase = 0;
             }
+            return;
+        }
 
-        } else if (phase == 2) {
-            String wanted = norm(p.getString("liste", ""));
-            Chip goal = null;
-            if (!wanted.isEmpty()) {
-                for (Chip c : chips) for (String l : c.labels) if (norm(l).startsWith(wanted)) goal = c;
-                if (goal == null) log("Liste « " + wanted + " » introuvable — " + describe(chips));
-            } else if (p.getBoolean("autofirst", true)) {
-                goal = first;
-            }
-            if (goal != null) {
-                if (goal.selected) log("Déjà sélectionnée : " + label(goal));
-                else click(goal);
-            }
-            phase = 3;
-            swipeTries = 0;
-            waitUntil = now + 800;
+        int d = goal.r.left - dp(16);   // > 0 : trop à droite, < 0 : coupée à gauche
 
-        } else if (phase == 3) {
-            if (slide && d > dp(12) && swipeTries < 2) {
+        if (phase == 1 || phase == 3) {
+            int maxTries = phase == 1 ? 6 : 8;
+            if (slide && Math.abs(d) > dp(12) && swipeTries < maxTries) {
                 swipeTries++;
-                log("Recalage de " + d + " px après le clic");
-                swipeLeft(first.r.centerY(), d);
+                log("Placement de « " + label(goal) + " » : décalage " + d + " px — " + describe(chips));
+                swipe(goal.r.centerY(), d);
                 waitUntil = now + 700;
+            } else if (phase == 1) {
+                if (slide) log("« " + label(goal) + " » est à gauche — " + describe(chips));
+                phase = 2;
             } else {
                 log("Macro terminée");
                 phase = 0;
             }
+
+        } else if (phase == 2) {
+            if (p.getBoolean("click", true)) {
+                if (goal.selected) log("Déjà sélectionnée : " + label(goal));
+                else click(goal);
+                waitUntil = now + 800;
+            }
+            phase = 3;
         }
     }
 
     // ---------- Barre des listes ----------
 
-    private List<Chip> findChips(List<Item> items, int W, int H) {
+    private List<Chip> findChips(List<Item> items, int W, int H, String wanted) {
         List<Chip> chips = new ArrayList<>();
         Rect band = null;
         for (Item it : items) {
-            if (it.r.centerY() < H * 0.4 && (starts(it, "Toutes") || starts(it, "Non lues"))) {
+            if (it.r.centerY() < H * 0.4 && (starts(it, "Toutes") || starts(it, "Non lues")
+                    || (!wanted.isEmpty() && starts(it, wanted)))) {
                 band = target(it.node, W);
                 break;
             }
@@ -336,14 +338,6 @@ public class MaskService extends AccessibilityService {
         return chips;
     }
 
-    private Chip firstAfterToutes(List<Chip> chips) {
-        for (int i = 0; i < chips.size(); i++) {
-            if (chips.get(i).toutes) return i + 1 < chips.size() ? chips.get(i + 1) : null;
-        }
-        for (Chip c : chips) if (c.nonLues) return c;
-        return null;
-    }
-
     private String label(Chip c) {
         return c.labels.isEmpty() ? "?" : c.labels.get(0);
     }
@@ -375,14 +369,23 @@ public class MaskService extends AccessibilityService {
         log("Appui sur « " + label(c) + " » (geste envoyé : " + ok + ")");
     }
 
-    // Glisse la barre vers la gauche de "dist" px : mouvement lent puis doigt immobile
-    // avant de relâcher, pour éviter l'effet "lancer" qui irait trop loin.
-    private void swipeLeft(int y, int dist) {
+    // Fait défiler la barre : dist > 0 = contenu vers la gauche, dist < 0 = vers la droite.
+    // Mouvement lent puis doigt immobile avant de relâcher, pour éviter l'effet "lancer".
+    // On évite les bords de l'écran (geste retour d'Android).
+    private void swipe(int y, int dist) {
         DisplayMetrics dm = new DisplayMetrics();
         wm.getDefaultDisplay().getRealMetrics(dm);
-        int x0 = (int) (dm.widthPixels * 0.92);
-        int total = Math.min(dist + ViewConfiguration.get(this).getScaledTouchSlop(), x0 - dp(4));
-        int x1 = x0 - total;
+        int W = dm.widthPixels;
+        int slop = ViewConfiguration.get(this).getScaledTouchSlop();
+        int x0, x1;
+        if (dist > 0) {
+            x0 = (int) (W * 0.85);
+            x1 = Math.max((int) (W * 0.08), x0 - dist - slop);
+        } else {
+            x0 = (int) (W * 0.15);
+            x1 = Math.min((int) (W * 0.92), x0 - dist + slop);
+        }
+        int step = x1 > x0 ? 1 : -1;
 
         Path move = new Path();
         move.moveTo(x0, y);
@@ -391,7 +394,7 @@ public class MaskService extends AccessibilityService {
                 new GestureDescription.StrokeDescription(move, 0, 400, true);
         Path hold = new Path();
         hold.moveTo(x1, y);
-        hold.lineTo(x1 - 1, y);
+        hold.lineTo(x1 + step, y);
         GestureDescription.StrokeDescription s2 = s1.continueStroke(hold, 0, 300, false);
 
         startGesture();
