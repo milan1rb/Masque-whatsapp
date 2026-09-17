@@ -52,9 +52,13 @@ public class MainActivity extends Activity {
         check(root, "commu", "Onglet Communautés", true);
         check(root, "debug", "Mode test : masques rouges transparents", false);
 
-        title(root, "Liste à ouvrir au lancement");
+        title(root, "Macros");
+        check(root, "slide", "Faire glisser les listes pour cacher « Toutes »", true);
+        check(root, "autofirst", "Au lancement, ouvrir la 1re liste après « Toutes »", true);
+
+        title(root, "Liste précise à ouvrir (optionnel)");
         EditText list = new EditText(this);
-        list.setHint("ex : POTO'S  (vide = désactivé)");
+        list.setHint("ex : POTO'S  (vide = 1re liste après Toutes)");
         list.setSingleLine(true);
         list.setText(prefs.getString("liste", ""));
         root.addView(list);

@@ -1,6 +1,9 @@
 package com.perso.wamasque;
 
 import android.accessibilityservice.AccessibilityService;
+import android.accessibilityservice.GestureDescription;
+import android.graphics.Path;
+import android.view.ViewConfiguration;
 import android.content.SharedPreferences;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
@@ -40,6 +43,11 @@ public class MaskService extends AccessibilityService {
     private long selectUntil = 0;
     private int scrollTries = 0;
     private long lastDumpTime = 0;
+    private long homeSince = 0;
+    private boolean gestureBusy = false;
+    private long gestureStart = 0;
+    private long nextSlideAt = 0;
+    private int slideTries = 0;
 
     private final Runnable tick = () -> {
         scheduled = false;
@@ -95,6 +103,7 @@ public class MaskService extends AccessibilityService {
             inWhatsApp = true;
             selectUntil = now + 8000;
             scrollTries = 0;
+            slideTries = 0;
         }
 
         DisplayMetrics dm = new DisplayMetrics();
@@ -113,6 +122,8 @@ public class MaskService extends AccessibilityService {
             }
         }
         boolean home = hasDisc && hasCalls;
+        if (!home) homeSince = 0;
+        else if (homeSince == 0) homeSince = now;
 
         if (home && now - lastDumpTime > 1500) {
             lastDumpTime = now;
@@ -155,10 +166,149 @@ public class MaskService extends AccessibilityService {
 
         showRects(rects, p.getBoolean("debug", false) ? COLOR_TEST : COLOR_MASK);
 
-        String wanted = norm(p.getString("liste", ""));
-        if (home && !wanted.isEmpty() && now < selectUntil) {
-            trySelect(items, wanted, W, H);
+        if (!home) return;
+        if (gestureBusy && now - gestureStart > 3000) gestureBusy = false;
+        if (gestureBusy || now - homeSince < 500) return;
+
+        List<Chip> chips = findChips(items, W, H);
+        Chip first = firstAfterToutes(chips);
+
+        // Macro 1 : au lancement, ouvrir la liste voulue (ou la 1re après Toutes)
+        if (now < selectUntil) {
+            String wanted = norm(p.getString("liste", ""));
+            Chip goal = null;
+            if (!wanted.isEmpty()) {
+                for (Chip c : chips) for (String l : c.labels) if (norm(l).startsWith(wanted)) goal = c;
+            } else if (p.getBoolean("autofirst", true)) {
+                goal = first;
+            }
+            if (goal != null) {
+                if (!goal.selected) tap(goal.r.centerX(), goal.r.centerY());
+                selectUntil = 0;
+                nextSlideAt = now + 800;
+                return;
+            } else if (!wanted.isEmpty() && scrollTries < 5) {
+                for (Item it : items) {
+                    if (it.node.isScrollable() && it.r.centerY() < H * 0.35 && it.r.height() < H * 0.15) {
+                        it.node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+                        scrollTries++;
+                        return;
+                    }
+                }
+            }
         }
+
+        // Macro 2 : faire glisser les listes pour que la 1re après Toutes soit tout à gauche
+        if (p.getBoolean("slide", true) && first != null && now >= nextSlideAt) {
+            int d = first.r.left - dp(16);
+            if (d > dp(12)) {
+                if (slideTries < 4) {
+                    slideTries++;
+                    nextSlideAt = now + 1200;
+                    int x0 = (int) (W * 0.92);
+                    int dist = Math.min(d + ViewConfiguration.get(this).getScaledTouchSlop(), x0 - dp(4));
+                    swipeLeft(x0, first.r.centerY(), dist);
+                }
+            } else {
+                slideTries = 0;
+            }
+        }
+    }
+
+    static class Chip {
+        Rect r;
+        boolean toutes, nonLues, selected;
+        List<String> labels = new ArrayList<>();
+    }
+
+    // Reconstitue la barre des listes (Toutes, Non lues, POTO'S...) triée de gauche à droite
+    private List<Chip> findChips(List<Item> items, int W, int H) {
+        List<Chip> chips = new ArrayList<>();
+        Rect band = null;
+        for (Item it : items) {
+            if (it.r.centerY() < H * 0.35 && (starts(it, "Toutes") || starts(it, "Non lues"))) {
+                band = target(it.node, W);
+                break;
+            }
+        }
+        if (band == null) {
+            for (Item it : items) {
+                if (it.node.isScrollable() && it.r.centerY() < H * 0.35 && it.r.height() < H * 0.15) {
+                    band = new Rect(it.r);
+                    break;
+                }
+            }
+        }
+        if (band == null) return chips;
+
+        for (Item it : items) {
+            int cy = it.r.centerY();
+            if (cy < band.top || cy > band.bottom || it.r.isEmpty()) continue;
+            if (it.text.isEmpty() && it.desc.isEmpty()) continue;
+            AccessibilityNodeInfo cn = clickableNode(it.node, W);
+            Rect r = new Rect();
+            cn.getBoundsInScreen(r);
+            if (r.isEmpty() || r.height() > H * 0.1 || r.width() > W * 0.6) continue;
+            Chip c = null;
+            for (Chip e : chips) if (r.left < e.r.right && r.right > e.r.left) { c = e; break; }
+            if (c == null) { c = new Chip(); c.r = new Rect(r); chips.add(c); } else c.r.union(r);
+            if (starts(it, "Toutes")) c.toutes = true;
+            if (starts(it, "Non lues")) c.nonLues = true;
+            if (!it.text.isEmpty()) c.labels.add(it.text);
+            if (!it.desc.isEmpty()) c.labels.add(it.desc);
+            if (it.node.isSelected() || it.node.isChecked() || cn.isSelected() || cn.isChecked()) c.selected = true;
+        }
+        chips.sort((a, b) -> Integer.compare(a.r.left, b.r.left));
+        return chips;
+    }
+
+    private Chip firstAfterToutes(List<Chip> chips) {
+        for (int i = 0; i < chips.size(); i++) {
+            if (chips.get(i).toutes) return i + 1 < chips.size() ? chips.get(i + 1) : null;
+        }
+        for (Chip c : chips) if (c.nonLues) return c;
+        return null;
+    }
+
+    private final GestureResultCallback gestureDone = new GestureResultCallback() {
+        @Override public void onCompleted(GestureDescription g) { gestureBusy = false; }
+        @Override public void onCancelled(GestureDescription g) { gestureBusy = false; }
+    };
+
+    private void tap(int x, int y) {
+        Path path = new Path();
+        path.moveTo(x, y);
+        GestureDescription g = new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(path, 0, 60)).build();
+        gestureBusy = true;
+        gestureStart = SystemClock.uptimeMillis();
+        if (!dispatchGesture(g, gestureDone, null)) gestureBusy = false;
+    }
+
+    // Glissement lent puis arrêt du doigt, pour éviter l'effet "lancer" qui irait trop loin
+    private void swipeLeft(int x0, int y, int dist) {
+        int x1 = x0 - dist;
+        Path move = new Path();
+        move.moveTo(x0, y);
+        move.lineTo(x1, y);
+        GestureDescription.StrokeDescription s1 =
+                new GestureDescription.StrokeDescription(move, 0, 350, true);
+        Path hold = new Path();
+        hold.moveTo(x1, y);
+        hold.lineTo(x1 - 1, y);
+        GestureDescription.StrokeDescription s2 = s1.continueStroke(hold, 0, 250, false);
+
+        gestureBusy = true;
+        gestureStart = SystemClock.uptimeMillis();
+        boolean ok = dispatchGesture(new GestureDescription.Builder().addStroke(s1).build(),
+                new GestureResultCallback() {
+                    @Override public void onCompleted(GestureDescription g) {
+                        if (!dispatchGesture(new GestureDescription.Builder().addStroke(s2).build(),
+                                gestureDone, null)) gestureBusy = false;
+                    }
+                    @Override public void onCancelled(GestureDescription g) { gestureBusy = false; }
+                }, null);
+        if (!ok) gestureBusy = false;
     }
 
     // "Toutes" introuvable par son nom : on le déduit de la position de "Non lues"
@@ -219,29 +369,6 @@ public class MaskService extends AccessibilityService {
             ai = new Rect(cx - size / 2, bottom - size, cx + size / 2, bottom);
         }
         add(rects, ai);
-    }
-
-    private void trySelect(List<Item> items, String wanted, int W, int H) {
-        for (Item it : items) {
-            if (it.visible && it.r.centerY() < H * 0.35 && starts(it, wanted)) {
-                AccessibilityNodeInfo c = clickableNode(it.node, W);
-                boolean already = c.isSelected() || c.isChecked()
-                        || it.node.isSelected() || it.node.isChecked();
-                if (!already) c.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                selectUntil = 0;
-                return;
-            }
-        }
-        // Liste pas visible : on fait défiler la barre des listes vers la droite
-        if (scrollTries < 5) {
-            for (Item it : items) {
-                if (it.node.isScrollable() && it.r.centerY() < H * 0.35 && it.r.height() < H * 0.15) {
-                    it.node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
-                    scrollTries++;
-                    return;
-                }
-            }
-        }
     }
 
     private void collect(AccessibilityNodeInfo n, int depth, List<Item> out) {
