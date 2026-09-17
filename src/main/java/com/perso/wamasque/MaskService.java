@@ -168,6 +168,7 @@ public class MaskService extends AccessibilityService {
         if (e.getEventType() == AccessibilityEvent.TYPE_VIEW_CLICKED && isWa(e.getPackageName())) {
             String key = clickKey(e);
             if (key != null) {
+                log("Appui sur " + key.replace("com.whatsapp:id/", ""));
                 pendingClick = key;
                 pendingClickTime = t;
                 if (prefs.getBoolean("learn", true) && prefs.getInt("gon:" + key, 0) >= 1) {
