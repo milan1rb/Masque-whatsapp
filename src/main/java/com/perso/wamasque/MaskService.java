@@ -62,10 +62,9 @@ public class MaskService extends AccessibilityService {
     private int phase = 0;
     private long phaseDeadline = 0;
     private long waitUntil = 0;
-    private int swipeTries = 0;
-    private int lastD = Integer.MIN_VALUE;
     private boolean clickAfter = true;
-    private boolean clicked = false;
+    private boolean resetAlways = false;
+    private int resetLeft = 0;
     private boolean gestureBusy = false;
     private long gestureStart = 0;
 
@@ -84,6 +83,7 @@ public class MaskService extends AccessibilityService {
     private long lastChipScan = 0;
     // Apprentissage de la couleur exacte du fond
     private View picker = null;
+    private View tuner = null;
     private boolean shotBusy = false;
     private long lastShot = 0;
 
@@ -219,6 +219,7 @@ public class MaskService extends AccessibilityService {
 
         if (!isWa(pkg)) {
             hidePicker();
+            hideTuner();
             showMasks(new HashMap<>(), 0);
             if (!pkg.equals("com.android.systemui")) {
                 inWhatsApp = false;
@@ -249,6 +250,7 @@ public class MaskService extends AccessibilityService {
             return;
         }
         hidePicker();
+        if (prefs.getBoolean("tune", false)) showTuner(); else hideTuner();
         Scan sc = scan(now);
 
         if (!sc.home) {
@@ -285,7 +287,6 @@ public class MaskService extends AccessibilityService {
             saveCache(want);
         }
         showMasks(want, 0);
-        verifyColor(want, now);
 
         List<Chip> chips = findChips(sc.chipItems);
         if (chips.isEmpty() && (phase != 0 || prefs.getBoolean("slide", true))
@@ -499,11 +500,10 @@ public class MaskService extends AccessibilityService {
     private void startMacro(long now, boolean withClick) {
         phase = 1;
         clickAfter = withClick;
-        clicked = false;
+        resetAlways = false;
+        resetLeft = 0;
         phaseDeadline = now + 10000;
         waitUntil = now;
-        swipeTries = 0;
-        lastD = Integer.MIN_VALUE;
     }
 
     private void runMacro(boolean home, List<Chip> chips, List<Item> items, long now) {
@@ -522,86 +522,56 @@ public class MaskService extends AccessibilityService {
         }
         if (chips.isEmpty()) { log("Barre des listes introuvable"); return; }
 
-        String wanted = norm(prefs.getString("liste", ""));
+        int y = chips.get(0).r.centerY();
+        int fixed = prefs.getInt("swipepx", 0);
         boolean slide = prefs.getBoolean("slide", true);
-        Chip goal = findGoal(chips, wanted);
 
-        if (goal == null) {
-            if (swipeTries < 6) {
-                swipeTries++;
-                int dir = toutesVisible(chips) ? 1 : -1;
-                log("« " + wanted + " » pas visible, défilement — " + describe(chips));
-                swipe(chips.get(0).r.centerY(), dir * W / 2);
-                waitUntil = now;
-            } else {
-                log("« " + wanted + " » introuvable — " + describe(chips));
-                phase = 0;
+        if (phase == 1) {
+            // 1. clic sur la liste voulue (sert uniquement à ça)
+            if (clickAfter && prefs.getBoolean("click", true)) {
+                String wanted = norm(prefs.getString("liste", ""));
+                Chip goal = findGoal(chips, wanted);
+                if (goal == null) log("Liste « " + wanted + " » pas visible — " + describe(chips));
+                else if (goal.selected) log("Déjà sélectionnée : " + goal.name);
+                else { click(goal); }
             }
-            return;
-        }
-
-        // Clic immédiat : la liste s'affiche sans attendre le glissement
-        if (phase == 1 && clickAfter && !clicked && prefs.getBoolean("click", true)) {
-            clicked = true;
-            if (goal.selected) log("Déjà sélectionnée : " + goal.name);
-            else click(goal);
+            // 2. on repart du début de la barre si besoin
+            resetLeft = (resetAlways || !toutesVisible(chips)) ? 3 : 0;
+            phase = 2;
             if (gestureBusy) return;
         }
 
-        int target = targetX();
-        int d = goal.r.left - target;
-        boolean ok = Math.abs(d) <= dp(4);
-        boolean stuck = lastD != Integer.MIN_VALUE && Math.abs(d - lastD) < dp(2);
-        int maxTries = phase == 1 ? 4 : 3;
-
-        int fixed = prefs.getInt("swipepx", 0);
-        if (slide && !ok && phase == 1 && swipeTries == 0 && fixed > 0 && toutesVisible(chips)) {
-            // Distance fixe réglée dans l'app : un seul glissement, toujours identique
-            swipeTries++;
-            lastD = d;
-            log("Glissement fixe de " + fixed + " px");
-            swipeRaw(goal.r.centerY(), fixed);
-            waitUntil = now;
-        } else if (slide && !ok && swipeTries < maxTries && !stuck) {
-            swipeTries++;
-            lastD = d;
-            log("Placement de « " + goal.name + " » : " + d + " px (cible x=" + target + ")");
-            swipe(goal.r.centerY(), d);
-            waitUntil = now;
-        } else {
-            if (stuck) log("La barre ne peut pas aller plus loin");
-            lastD = Integer.MIN_VALUE;
-            if (phase == 1) {
-                phase = 3;
-                swipeTries = 0;
-                waitUntil = now + 250;
-            } else {
-                log("Macro terminée — " + describe(chips));
+        if (phase == 2) {
+            if (!slide || fixed <= 0) {
+                if (fixed <= 0) log("Distance de glissement non réglée dans l'app");
                 phase = 0;
+                return;
             }
+            if (resetLeft > 0) {
+                resetLeft--;
+                swipeRaw(y, -(int) (W * 0.7));   // vers la droite : retour au début de la barre
+                waitUntil = now;
+                return;
+            }
+            log("Glissement de " + fixed + " px");
+            swipeRaw(y, fixed);
+            phase = 0;
         }
     }
 
-    // Si la barre reste 2 s plus à droite que la position de base, on la remet en place
+    // Si la barre part vers la droite et reste immobile 2 s, on la remet en place
     private void watchdog(List<Chip> chips, List<Item> items, long now) {
-        String wanted = norm(prefs.getString("liste", ""));
-        if (wanted.isEmpty() || chips.isEmpty() || gestureBusy) { misalignedSince = 0; return; }
-        Chip goal = findGoal(chips, wanted);
-        boolean tooRight;
-        int pos;
-        if (goal == null) {
-            tooRight = toutesVisible(chips);
-            pos = chips.get(0).r.left;
-        } else {
-            tooRight = goal.r.left > targetX() + dp(4);
-            pos = goal.r.left;
+        if (chips.isEmpty() || gestureBusy || prefs.getInt("swipepx", 0) <= 0) {
+            misalignedSince = 0;
+            return;
         }
-        if (!tooRight) {
+        if (!toutesVisible(chips)) {
             misalignedSince = 0;
             watchPos = Integer.MIN_VALUE;
             return;
         }
-        if (Math.abs(pos - watchPos) > dp(2)) {   // la barre bouge encore : on attend qu'elle s'arrête
+        int pos = chips.get(0).r.left;
+        if (Math.abs(pos - watchPos) > dp(2)) {   // la barre bouge encore : on attend
             watchPos = pos;
             misalignedSince = now;
         }
@@ -610,7 +580,7 @@ public class MaskService extends AccessibilityService {
             watchPos = Integer.MIN_VALUE;
             log("Retour à la position de base");
             startMacro(now, false);
-            return;
+            resetAlways = true;
         }
         schedule(250);
     }
@@ -649,11 +619,6 @@ public class MaskService extends AccessibilityService {
     private boolean toutesVisible(List<Chip> chips) {
         for (Chip c : chips) if (norm(c.name).startsWith("toutes")) return true;
         return false;
-    }
-
-    // Position voulue de la liste : valeur fixe réglée dans l'app (0 = bord gauche de l'écran)
-    private int targetX() {
-        return prefs.getInt("posx", 20);
     }
 
     private String describe(List<Chip> chips) {
@@ -763,66 +728,6 @@ public class MaskService extends AccessibilityService {
         }
     }
 
-    // Vérifie que le cache affiche EXACTEMENT la même couleur que le point choisi à la pipette
-    // et corrige l'écart : l'écran ne restitue pas les valeurs brutes à l'identique.
-    private void verifyColor(Map<String, Rect> want, long now) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
-        if (prefs.getInt("verify", 0) <= 0 || prefs.getBoolean("debug", false)) return;
-        if (shotBusy || now - lastShot < 800 || want.isEmpty()) return;
-        Rect big = null;
-        for (Rect r : want.values()) {
-            if (big == null || r.width() * r.height() > big.width() * big.height()) big = r;
-        }
-        if (big == null || big.width() < dp(20) || big.height() < dp(20)) return;
-        final Rect mask = new Rect(big);
-        final int rx = prefs.getInt("refx", 0), ry = prefs.getInt("refy", 0);
-
-        lastShot = now;
-        shotBusy = true;
-        try {
-            takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
-                @Override public void onSuccess(ScreenshotResult result) {
-                    shotBusy = false;
-                    try {
-                        Bitmap hw = Bitmap.wrapHardwareBuffer(result.getHardwareBuffer(), result.getColorSpace());
-                        Bitmap bmp = hw == null ? null : hw.copy(Bitmap.Config.ARGB_8888, false);
-                        if (hw != null) hw.recycle();
-                        if (bmp != null) {
-                            int wanted = avg(bmp, rx, ry);
-                            int shown = avg(bmp, mask.centerX(), mask.centerY());
-                            bmp.recycle();
-                            if (wanted != 0 && shown != 0) {
-                                int dr = Color.red(wanted) - Color.red(shown);
-                                int dg = Color.green(wanted) - Color.green(shown);
-                                int db = Color.blue(wanted) - Color.blue(shown);
-                                int left = prefs.getInt("verify", 0) - 1;
-                                if (Math.abs(dr) <= 1 && Math.abs(dg) <= 1 && Math.abs(db) <= 1) {
-                                    prefs.edit().putInt("verify", 0).apply();
-                                    log("Couleur vérifiée : identique au fond");
-                                } else {
-                                    int cur = maskColor();
-                                    int fix = Color.rgb(clamp(Color.red(cur) + dr),
-                                            clamp(Color.green(cur) + dg), clamp(Color.blue(cur) + db));
-                                    String hex = String.format("#%06X", fix & 0xFFFFFF);
-                                    prefs.edit().putString("color", hex).putInt("verify", left).apply();
-                                    painted.clear();
-                                    log("Couleur corrigée : " + hex + " (écart " + dr + "," + dg + "," + db + ")");
-                                    schedule(30);
-                                }
-                            }
-                        }
-                        result.getHardwareBuffer().close();
-                    } catch (Exception e) {
-                        log("Vérification couleur : " + e);
-                    }
-                }
-                @Override public void onFailure(int errorCode) { shotBusy = false; }
-            });
-        } catch (Exception e) {
-            shotBusy = false;
-        }
-    }
-
     private int avg(Bitmap bmp, int x, int y) {
         long r = 0, g = 0, b = 0;
         int n = 0;
@@ -841,6 +746,84 @@ public class MaskService extends AccessibilityService {
 
     private static int clamp(int v) {
         return v < 0 ? 0 : (v > 255 ? 255 : v);
+    }
+
+    // ---------- Réglage manuel de la couleur, en direct sur WhatsApp ----------
+
+    private void showTuner() {
+        if (tuner != null) return;
+        android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        box.setBackgroundColor(0xEE202020);
+        box.setPadding(dp(10), dp(10), dp(10), dp(10));
+
+        final android.widget.TextView label = new android.widget.TextView(this);
+        label.setTextColor(0xFFFFFFFF);
+        label.setText(prefs.getString("color", DEFAULT_COLOR));
+        box.addView(label);
+
+        int[][] steps = {{1, 1, 1}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+        String[] names = {"Tout", "R", "V", "B"};
+        for (int i = 0; i < steps.length; i++) {
+            final int[] st = steps[i];
+            android.widget.LinearLayout row = new android.widget.LinearLayout(this);
+            row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+            android.widget.TextView t = new android.widget.TextView(this);
+            t.setText(names[i] + "  ");
+            t.setTextColor(0xFFFFFFFF);
+            row.addView(t);
+            row.addView(tuneButton("-", st, -1, label));
+            row.addView(tuneButton("+", st, 1, label));
+            box.addView(row);
+        }
+        android.widget.Button done = new android.widget.Button(this);
+        done.setText("Terminé");
+        done.setOnClickListener(v -> {
+            prefs.edit().putBoolean("tune", false).apply();
+            hideTuner();
+        });
+        box.addView(done);
+
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT);
+        lp.gravity = Gravity.TOP | Gravity.START;
+        lp.x = dp(16);
+        lp.y = (int) (H * 0.35);
+        lp.windowAnimations = 0;
+        if (Build.VERSION.SDK_INT >= 30) lp.setFitInsetsTypes(0);
+        try {
+            wm.addView(box, lp);
+            tuner = box;
+        } catch (Exception e) {
+            log("Réglage couleur impossible : " + e);
+        }
+    }
+
+    private android.widget.Button tuneButton(String text, int[] st, int sign, android.widget.TextView label) {
+        android.widget.Button b = new android.widget.Button(this);
+        b.setText(text);
+        b.setOnClickListener(v -> {
+            int c = maskColor();
+            int nc = Color.rgb(clamp(Color.red(c) + st[0] * sign),
+                    clamp(Color.green(c) + st[1] * sign), clamp(Color.blue(c) + st[2] * sign));
+            String hex = String.format("#%06X", nc & 0xFFFFFF);
+            prefs.edit().putString("color", hex).apply();
+            painted.clear();
+            label.setText(hex);
+            showMasks(lastWant, 0);
+        });
+        return b;
+    }
+
+    private void hideTuner() {
+        if (tuner == null) return;
+        try { wm.removeView(tuner); } catch (Exception ignored) { }
+        tuner = null;
     }
 
     // ---------- Pipette ----------
@@ -935,8 +918,7 @@ public class MaskService extends AccessibilityService {
                     prefs.edit().putBoolean("calibcolor", false).apply();
                     if (color != 0) {
                         String hex = String.format("#%06X", color & 0xFFFFFF);
-                        prefs.edit().putString("color", hex)
-                                .putInt("refx", x).putInt("refy", y).putInt("verify", 6).apply();
+                        prefs.edit().putString("color", hex).apply();
                         painted.clear();
                         log("Pipette : couleur mesurée " + hex + " en " + x + "," + y);
                         schedule(30);

@@ -74,6 +74,19 @@ public class MainActivity extends Activity {
         });
         root.addView(pipette);
 
+        Button tune = new Button(this);
+        tune.setText("Régler la couleur à la main dans WhatsApp");
+        tune.setOnClickListener(v -> {
+            prefs.edit().putBoolean("tune", true).apply();
+            Intent wa = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
+            if (wa == null) {
+                Toast.makeText(this, "WhatsApp introuvable", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            startActivity(wa);
+        });
+        root.addView(tune);
+
         Button saveColor = new Button(this);
         saveColor.setText("Enregistrer la couleur");
         saveColor.setOnClickListener(v -> {
@@ -127,27 +140,8 @@ public class MainActivity extends Activity {
         });
         root.addView(launch);
         check(root, "slide", "Placer cette liste tout à gauche", true);
-        TextView posLabel = new TextView(this);
-        posLabel.setText("Position X voulue de la liste en pixels (0 = bord gauche)");
-        posLabel.setPadding(0, dp(12), 0, 0);
-        root.addView(posLabel);
-        EditText posX = new EditText(this);
-        posX.setSingleLine(true);
-        posX.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        posX.setText(String.valueOf(prefs.getInt("posx", 20)));
-        root.addView(posX);
-        posX.addTextChangedListener(new android.text.TextWatcher() {
-            public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
-            public void onTextChanged(CharSequence c, int a, int b, int d) { }
-            public void afterTextChanged(android.text.Editable e) {
-                int val = 20;
-                try { val = Integer.parseInt(e.toString().trim()); } catch (Exception ignored) { }
-                prefs.edit().putInt("posx", val).apply();
-            }
-        });
-
         TextView swipeLabel = new TextView(this);
-        swipeLabel.setText("Distance du glissement au lancement, en pixels (0 = calcul automatique)");
+        swipeLabel.setText("Distance du glissement en pixels (utilisée au lancement et pour revenir en place)");
         swipeLabel.setPadding(0, dp(12), 0, 0);
         root.addView(swipeLabel);
         EditText swipePx = new EditText(this);
