@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
@@ -17,6 +18,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.DisplayMetrics;
+import android.view.Display;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -82,6 +84,11 @@ public class MaskService extends AccessibilityService {
     private String calibName = null;
     private boolean fastBroken = false;
     private long lastFullCheck = 0;
+    // Apprentissage de la couleur exacte du fond
+    private long lastShot = 0;
+    private boolean shotBusy = false;
+    private boolean overlaysInShot = true;
+    private final Map<String, Integer> colorTries = new HashMap<>();
 
     private final Runnable tick = () -> {
         scheduled = false;
@@ -160,7 +167,7 @@ public class MaskService extends AccessibilityService {
                 int score = prefs.getInt("cls:" + cls, 0);
                 if (score >= 2) {
                     metrics();
-                    showMasks(loadCache(), maskColor());
+                    showMasks(loadCache(), 0);
                 } else if (score <= -2) {
                     showMasks(new HashMap<>(), 0);
                 }
@@ -244,7 +251,7 @@ public class MaskService extends AccessibilityService {
             learnClass(now, false, sc);
             if (!sc.bigOther && !sc.popups.isEmpty() && now - lastHomeTime < 60000) {
                 // Menu ouvert par-dessus l'écran principal : on garde les caches
-                showMasks(withoutPopups(lastWant, sc.popups), maskColor());
+                showMasks(withoutPopups(lastWant, sc.popups), 0);
             } else {
                 showMasks(new HashMap<>(), 0);
             }
@@ -264,10 +271,12 @@ public class MaskService extends AccessibilityService {
 
         Map<String, Rect> want = withoutPopups(sc.want, sc.popups);
         if (sc.popups.isEmpty()) {
+            if (!want.equals(lastWant)) colorTries.clear();
             lastWant = new HashMap<>(want);
             saveCache(want);
         }
-        showMasks(want, maskColor());
+        showMasks(want, 0);
+        if (sc.popups.isEmpty()) learnColors(want, now);
 
         List<Chip> chips = findChips(sc.chipItems);
         if (phase != 0) {
@@ -720,13 +729,137 @@ public class MaskService extends AccessibilityService {
 
     // ---------- Masques ----------
 
-    private int maskColor() {
-        if (prefs.getBoolean("debug", false)) return COLOR_TEST;
+    private int baseColor() {
         try {
             return Color.parseColor(prefs.getString("color", DEFAULT_COLOR).trim());
         } catch (Exception e) {
             return Color.parseColor(DEFAULT_COLOR);
         }
+    }
+
+    private int colorFor(String key) {
+        if (prefs.getBoolean("debug", false)) return COLOR_TEST;
+        return prefs.getInt("col:" + key, baseColor());
+    }
+
+    // Prend une capture de l'écran, compare la couleur du cache à celle du fond juste à côté
+    // et corrige, jusqu'à ce que les deux soient identiques.
+    private void learnColors(Map<String, Rect> want, long now) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
+        if (!prefs.getBoolean("autocolor", true) || prefs.getBoolean("debug", false)) return;
+        if (shotBusy || want.isEmpty() || now - lastShot < 1500) return;
+        boolean todo = false;
+        for (String k : want.keySet()) if (colorTries.getOrDefault(k, 0) < 8) todo = true;
+        if (!todo) return;
+
+        lastShot = now;
+        shotBusy = true;
+        final Map<String, Rect> snapshot = new HashMap<>(want);
+        try {
+            takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
+                @Override public void onSuccess(ScreenshotResult result) {
+                    shotBusy = false;
+                    try {
+                        Bitmap hw = Bitmap.wrapHardwareBuffer(result.getHardwareBuffer(), result.getColorSpace());
+                        if (hw != null) {
+                            Bitmap bmp = hw.copy(Bitmap.Config.ARGB_8888, false);
+                            hw.recycle();
+                            if (bmp != null) {
+                                analyzeColors(bmp, snapshot);
+                                bmp.recycle();
+                            }
+                        }
+                        result.getHardwareBuffer().close();
+                    } catch (Exception e) {
+                        log("Couleur : " + e);
+                    }
+                }
+                @Override public void onFailure(int errorCode) {
+                    shotBusy = false;
+                }
+            });
+        } catch (Exception e) {
+            shotBusy = false;
+        }
+    }
+
+    private void analyzeColors(Bitmap bmp, Map<String, Rect> want) {
+        float sx = bmp.getWidth() / (float) W;
+        float sy = bmp.getHeight() / (float) H;
+        boolean changed = false;
+        SharedPreferences.Editor ed = prefs.edit();
+
+        for (Map.Entry<String, Rect> e : want.entrySet()) {
+            String key = e.getKey();
+            Rect r = e.getValue();
+            int tries = colorTries.getOrDefault(key, 0);
+            if (tries >= 8) continue;
+
+            int pad = dp(5);
+            int[] in = new int[]{
+                    pixel(bmp, sx, sy, r.centerX(), r.centerY()),
+                    pixel(bmp, sx, sy, r.left + pad, r.top + pad),
+                    pixel(bmp, sx, sy, r.right - pad, r.bottom - pad),
+                    pixel(bmp, sx, sy, r.left + pad, r.bottom - pad)};
+            int lo = 255 * 3, hi = 0, inside = -1;
+            for (int c : in) {
+                if (c == -1) continue;
+                int sum = Color.red(c) + Color.green(c) + Color.blue(c);
+                lo = Math.min(lo, sum);
+                hi = Math.max(hi, sum);
+                inside = c;
+            }
+            if (inside == -1) continue;
+            if (hi - lo > 12) {
+                if (overlaysInShot) log("Capture sans les caches : réglage direct de la couleur");
+                overlaysInShot = false;
+            }
+
+            // Fond juste à côté du cache : on garde le point le plus sombre (le fond, pas une icône)
+            int out = -1, best = Integer.MAX_VALUE;
+            int off = dp(8);
+            int[][] pts = {{r.left - off, r.centerY()}, {r.right + off, r.centerY()},
+                    {r.centerX(), r.top - off}, {r.centerX(), r.bottom + off},
+                    {r.left - off, r.top - off}, {r.right + off, r.bottom + off}};
+            for (int[] pt : pts) {
+                int c = pixel(bmp, sx, sy, pt[0], pt[1]);
+                if (c == -1) continue;
+                int sum = Color.red(c) + Color.green(c) + Color.blue(c);
+                if (sum < best) { best = sum; out = c; }
+            }
+            if (out == -1) continue;
+
+            int cur = colorFor(key);
+            int target;
+            if (overlaysInShot) {
+                target = Color.rgb(
+                        clamp(Color.red(cur) + Color.red(out) - Color.red(inside)),
+                        clamp(Color.green(cur) + Color.green(out) - Color.green(inside)),
+                        clamp(Color.blue(cur) + Color.blue(out) - Color.blue(inside)));
+            } else {
+                target = out;
+            }
+            colorTries.put(key, tries + 1);
+            if (target != cur) {
+                ed.putInt("col:" + key, target);
+                changed = true;
+                log("Couleur ajustée pour " + key + " : " + String.format("#%06X", target & 0xFFFFFF));
+            }
+        }
+        if (changed) {
+            ed.apply();
+            schedule(30);
+        }
+    }
+
+    private static int clamp(int v) {
+        return v < 0 ? 0 : (v > 255 ? 255 : v);
+    }
+
+    private int pixel(Bitmap bmp, float sx, float sy, int x, int y) {
+        int px = Math.round(x * sx), py = Math.round(y * sy);
+        if (px < 0 || py < 0 || px >= bmp.getWidth() || py >= bmp.getHeight()) return -1;
+        return bmp.getPixel(px, py);
     }
 
     private String cacheKey() {
@@ -764,7 +897,7 @@ public class MaskService extends AccessibilityService {
     }
 
     // Une fenêtre fixe par élément, cachée/affichée sur place, sans animation
-    private void showMasks(Map<String, Rect> want, int color) {
+    private void showMasks(Map<String, Rect> want, int unusedColor) {
         if (wm == null) return;
         int m = dp(2);
         for (String key : KEYS) {
@@ -786,12 +919,12 @@ public class MaskService extends AccessibilityService {
 
             if (v == null) {
                 v = new View(this);
-                paint(v, key, color);
+                paint(v, key, colorFor(key));
                 v.setClickable(true);
                 try { wm.addView(v, params(g)); slots.put(key, v); } catch (Exception ignored) { }
                 continue;
             }
-            paint(v, key, color);
+            paint(v, key, colorFor(key));
             WindowManager.LayoutParams lp = (WindowManager.LayoutParams) v.getLayoutParams();
             boolean changed = false;
             if ((lp.flags & WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) != 0) {

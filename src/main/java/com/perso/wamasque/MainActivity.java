@@ -50,6 +50,7 @@ public class MainActivity extends Activity {
         check(root, "actus", "Onglet Actus", true);
         check(root, "commu", "Onglet Communautés", true);
         check(root, "debug", "Mode test : masques rouges transparents", false);
+        check(root, "autocolor", "Ajuster la couleur automatiquement (recommandé)", true);
 
         TextView colorLabel = new TextView(this);
         colorLabel.setText("Couleur des masques (code hexadécimal)");
@@ -130,7 +131,7 @@ public class MainActivity extends Activity {
         reset.setOnClickListener(v -> {
             SharedPreferences.Editor ed = prefs.edit();
             for (String k : prefs.getAll().keySet()) {
-                if (k.startsWith("cls:") || k.startsWith("cache:") || k.equals("calib")) ed.remove(k);
+                if (k.startsWith("cls:") || k.startsWith("cache:") || k.startsWith("col:") || k.equals("calib")) ed.remove(k);
             }
             ed.apply();
             refreshLearn.run();
