@@ -79,14 +79,13 @@ public class MaskService extends AccessibilityService {
     private String savedCacheStr = null;
     private String pendingClass = null;
     private long pendingClassTime = 0;
-    private int calibReq = 0;
-    private int calibLeft = Integer.MIN_VALUE;
-    private String calibName = null;
     private boolean fastBroken = false;
     private long lastFullCheck = 0;
     private long lastChipScan = 0;
     // Apprentissage de la couleur exacte du fond
     private View picker = null;
+    private boolean shotBusy = false;
+    private long lastShot = 0;
 
     private final Runnable tick = () -> {
         scheduled = false;
@@ -286,6 +285,7 @@ public class MaskService extends AccessibilityService {
             saveCache(want);
         }
         showMasks(want, 0);
+        verifyColor(want, now);
 
         List<Chip> chips = findChips(sc.chipItems);
         if (chips.isEmpty() && (phase != 0 || prefs.getBoolean("slide", true))
@@ -504,7 +504,6 @@ public class MaskService extends AccessibilityService {
         waitUntil = now;
         swipeTries = 0;
         lastD = Integer.MIN_VALUE;
-        calibName = null;
     }
 
     private void runMacro(boolean home, List<Chip> chips, List<Item> items, long now) {
@@ -528,12 +527,11 @@ public class MaskService extends AccessibilityService {
         Chip goal = findGoal(chips, wanted);
 
         if (goal == null) {
-            calibName = null;
             if (swipeTries < 6) {
                 swipeTries++;
                 int dir = toutesVisible(chips) ? 1 : -1;
                 log("« " + wanted + " » pas visible, défilement — " + describe(chips));
-                swipe(chips.get(0).r.centerY(), dir * W / 2, false);
+                swipe(chips.get(0).r.centerY(), dir * W / 2);
                 waitUntil = now;
             } else {
                 log("« " + wanted + " » introuvable — " + describe(chips));
@@ -550,42 +548,25 @@ public class MaskService extends AccessibilityService {
             if (gestureBusy) return;
         }
 
-        // Apprentissage : compare le déplacement demandé au déplacement réel
-        if (calibName != null && calibName.equals(goal.name) && calibLeft != Integer.MIN_VALUE) {
-            int moved = calibLeft - goal.r.left;
-            if (moved != 0 && Integer.signum(moved) == Integer.signum(calibReq)) {
-                int err = Math.abs(calibReq) - Math.abs(moved);
-                int calib = prefs.getInt("calib", 0);
-                int next = Math.max(-dp(40), Math.min(dp(80), calib + err * 8 / 10));
-                prefs.edit().putInt("calib", next).apply();
-            }
-            calibName = null;
-        }
-
-        int base = targetBase(chips, items);        // au-delà : la liste précédente dépasse
-        boolean ok = goal.r.left <= base && goal.r.left >= base - dp(8);
-        int d = goal.r.left - (base - dp(3));      // on vise un peu à gauche de la limite
+        int target = targetX();
+        int d = goal.r.left - target;
+        boolean ok = Math.abs(d) <= dp(4);
         boolean stuck = lastD != Integer.MIN_VALUE && Math.abs(d - lastD) < dp(2);
-        int maxTries = phase == 1 ? 5 : 3;
+        int maxTries = phase == 1 ? 4 : 3;
 
         int fixed = prefs.getInt("swipepx", 0);
         if (slide && !ok && phase == 1 && swipeTries == 0 && fixed > 0 && toutesVisible(chips)) {
             // Distance fixe réglée dans l'app : un seul glissement, toujours identique
             swipeTries++;
             lastD = d;
-            calibName = null;
             log("Glissement fixe de " + fixed + " px");
             swipeRaw(goal.r.centerY(), fixed);
             waitUntil = now;
         } else if (slide && !ok && swipeTries < maxTries && !stuck) {
             swipeTries++;
             lastD = d;
-            calibName = goal.name;
-            calibLeft = goal.r.left;
-            calibReq = d;
-            log("Placement de « " + goal.name + " » : " + d + " px (correction apprise "
-                    + prefs.getInt("calib", 0) + ")");
-            swipe(goal.r.centerY(), d, true);
+            log("Placement de « " + goal.name + " » : " + d + " px (cible x=" + target + ")");
+            swipe(goal.r.centerY(), d);
             waitUntil = now;
         } else {
             if (stuck) log("La barre ne peut pas aller plus loin");
@@ -612,7 +593,7 @@ public class MaskService extends AccessibilityService {
             tooRight = toutesVisible(chips);
             pos = chips.get(0).r.left;
         } else {
-            tooRight = goal.r.left > targetBase(chips, items) + dp(2);
+            tooRight = goal.r.left > targetX() + dp(4);
             pos = goal.r.left;
         }
         if (!tooRight) {
@@ -670,17 +651,9 @@ public class MaskService extends AccessibilityService {
         return false;
     }
 
-    // Position limite : bord de la barre + écart entre deux listes
-    private int targetBase(List<Chip> chips, List<Item> items) {
-        int barLeft = 0;
-        for (Item it : items) if (it.id.endsWith("filter_recycler_view")) { barLeft = it.r.left; break; }
-        int gap = Integer.MAX_VALUE;
-        for (int i = 0; i + 1 < chips.size(); i++) {
-            int g = chips.get(i + 1).r.left - chips.get(i).r.right;
-            if (g > 0 && g < gap) gap = g;
-        }
-        if (gap == Integer.MAX_VALUE) gap = dp(7);
-        return barLeft + gap;
+    // Position voulue de la liste : valeur fixe réglée dans l'app (0 = bord gauche de l'écran)
+    private int targetX() {
+        return prefs.getInt("posx", 20);
     }
 
     private String describe(List<Chip> chips) {
@@ -713,10 +686,8 @@ public class MaskService extends AccessibilityService {
     // dist > 0 : contenu vers la gauche, dist < 0 : vers la droite.
     // Mouvement rapide puis doigt immobile avant de relâcher (pas d'effet "lancer"),
     // loin des bords de l'écran (geste retour d'Android).
-    private void swipe(int y, int dist, boolean precise) {
-        int slop = ViewConfiguration.get(this).getScaledTouchSlop();
-        if (precise) slop += prefs.getInt("calib", 0);
-        swipeFinger(y, dist, slop);
+    private void swipe(int y, int dist) {
+        swipeFinger(y, dist, ViewConfiguration.get(this).getScaledTouchSlop());
     }
 
     // Glissement du doigt d'une distance exacte, sans correction
@@ -790,6 +761,86 @@ public class MaskService extends AccessibilityService {
         } catch (Exception e) {
             return Color.parseColor(DEFAULT_COLOR);
         }
+    }
+
+    // Vérifie que le cache affiche EXACTEMENT la même couleur que le point choisi à la pipette
+    // et corrige l'écart : l'écran ne restitue pas les valeurs brutes à l'identique.
+    private void verifyColor(Map<String, Rect> want, long now) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
+        if (prefs.getInt("verify", 0) <= 0 || prefs.getBoolean("debug", false)) return;
+        if (shotBusy || now - lastShot < 800 || want.isEmpty()) return;
+        Rect big = null;
+        for (Rect r : want.values()) {
+            if (big == null || r.width() * r.height() > big.width() * big.height()) big = r;
+        }
+        if (big == null || big.width() < dp(20) || big.height() < dp(20)) return;
+        final Rect mask = new Rect(big);
+        final int rx = prefs.getInt("refx", 0), ry = prefs.getInt("refy", 0);
+
+        lastShot = now;
+        shotBusy = true;
+        try {
+            takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
+                @Override public void onSuccess(ScreenshotResult result) {
+                    shotBusy = false;
+                    try {
+                        Bitmap hw = Bitmap.wrapHardwareBuffer(result.getHardwareBuffer(), result.getColorSpace());
+                        Bitmap bmp = hw == null ? null : hw.copy(Bitmap.Config.ARGB_8888, false);
+                        if (hw != null) hw.recycle();
+                        if (bmp != null) {
+                            int wanted = avg(bmp, rx, ry);
+                            int shown = avg(bmp, mask.centerX(), mask.centerY());
+                            bmp.recycle();
+                            if (wanted != 0 && shown != 0) {
+                                int dr = Color.red(wanted) - Color.red(shown);
+                                int dg = Color.green(wanted) - Color.green(shown);
+                                int db = Color.blue(wanted) - Color.blue(shown);
+                                int left = prefs.getInt("verify", 0) - 1;
+                                if (Math.abs(dr) <= 1 && Math.abs(dg) <= 1 && Math.abs(db) <= 1) {
+                                    prefs.edit().putInt("verify", 0).apply();
+                                    log("Couleur vérifiée : identique au fond");
+                                } else {
+                                    int cur = maskColor();
+                                    int fix = Color.rgb(clamp(Color.red(cur) + dr),
+                                            clamp(Color.green(cur) + dg), clamp(Color.blue(cur) + db));
+                                    String hex = String.format("#%06X", fix & 0xFFFFFF);
+                                    prefs.edit().putString("color", hex).putInt("verify", left).apply();
+                                    painted.clear();
+                                    log("Couleur corrigée : " + hex + " (écart " + dr + "," + dg + "," + db + ")");
+                                    schedule(30);
+                                }
+                            }
+                        }
+                        result.getHardwareBuffer().close();
+                    } catch (Exception e) {
+                        log("Vérification couleur : " + e);
+                    }
+                }
+                @Override public void onFailure(int errorCode) { shotBusy = false; }
+            });
+        } catch (Exception e) {
+            shotBusy = false;
+        }
+    }
+
+    private int avg(Bitmap bmp, int x, int y) {
+        long r = 0, g = 0, b = 0;
+        int n = 0;
+        float sx = bmp.getWidth() / (float) W, sy = bmp.getHeight() / (float) H;
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dy = -2; dy <= 2; dy++) {
+                int px = Math.round((x + dx) * sx), py = Math.round((y + dy) * sy);
+                if (px < 0 || py < 0 || px >= bmp.getWidth() || py >= bmp.getHeight()) continue;
+                int c = bmp.getPixel(px, py);
+                r += Color.red(c); g += Color.green(c); b += Color.blue(c);
+                n++;
+            }
+        }
+        return n == 0 ? 0 : Color.rgb((int) (r / n), (int) (g / n), (int) (b / n));
+    }
+
+    private static int clamp(int v) {
+        return v < 0 ? 0 : (v > 255 ? 255 : v);
     }
 
     // ---------- Pipette ----------
@@ -884,7 +935,8 @@ public class MaskService extends AccessibilityService {
                     prefs.edit().putBoolean("calibcolor", false).apply();
                     if (color != 0) {
                         String hex = String.format("#%06X", color & 0xFFFFFF);
-                        prefs.edit().putString("color", hex).apply();
+                        prefs.edit().putString("color", hex)
+                                .putInt("refx", x).putInt("refy", y).putInt("verify", 6).apply();
                         painted.clear();
                         log("Pipette : couleur mesurée " + hex + " en " + x + "," + y);
                         schedule(30);
