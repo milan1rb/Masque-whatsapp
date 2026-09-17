@@ -46,15 +46,14 @@ public class MainActivity extends Activity {
 
         title(root, "Éléments à masquer");
         check(root, "cam", "Bouton appareil photo (en haut)", true);
-        check(root, "toutes", "Liste « Toutes »", true);
         check(root, "metaai", "Bouton Meta AI (rond violet)", true);
         check(root, "actus", "Onglet Actus", true);
         check(root, "commu", "Onglet Communautés", true);
         check(root, "debug", "Mode test : masques rouges transparents", false);
 
         title(root, "Macros");
-        check(root, "slide", "Faire glisser les listes pour cacher « Toutes »", true);
-        check(root, "autofirst", "Au lancement, ouvrir la 1re liste après « Toutes »", true);
+        check(root, "slide", "Au lancement : ramener les listes au début (cacher « Toutes »)", true);
+        check(root, "autofirst", "Au lancement : ouvrir la 1re liste après « Toutes »", true);
 
         title(root, "Liste précise à ouvrir (optionnel)");
         EditText list = new EditText(this);
@@ -73,13 +72,13 @@ public class MainActivity extends Activity {
         title(root, "Diagnostic");
         Button show = new Button(this);
         show.setText("Afficher les éléments détectés");
-        show.setOnClickListener(v -> dumpView.setText(MaskService.lastDump));
+        show.setOnClickListener(v -> dumpView.setText(MaskService.diagnostic()));
         root.addView(show);
         Button copy = new Button(this);
         copy.setText("Copier le diagnostic");
         copy.setOnClickListener(v -> {
             ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-            cm.setPrimaryClip(ClipData.newPlainText("diagnostic", MaskService.lastDump));
+            cm.setPrimaryClip(ClipData.newPlainText("diagnostic", MaskService.diagnostic()));
             Toast.makeText(this, "Copié", Toast.LENGTH_SHORT).show();
         });
         root.addView(copy);
