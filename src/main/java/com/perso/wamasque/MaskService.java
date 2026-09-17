@@ -39,6 +39,7 @@ public class MaskService extends AccessibilityService {
 
     static final String PREFS = "config";
     static final String DEFAULT_COLOR = "#080E15";
+    static final String DEFAULT_COLOR_TOP = "#0A1013";
     static volatile boolean running = false;
     static volatile boolean forceMacro = false;
     private static volatile String lastDump = "(aucune capture de l'écran principal de WhatsApp)";
@@ -526,7 +527,7 @@ public class MaskService extends AccessibilityService {
         clickAfter = withClick;
         tries = 0;
         lastLeft = Integer.MIN_VALUE;
-        phaseDeadline = now + 10000;
+        phaseDeadline = now + 15000;
         waitUntil = now;
     }
 
@@ -558,7 +559,9 @@ public class MaskService extends AccessibilityService {
             phase = 2;
             tries = 0;
             lastLeft = Integer.MIN_VALUE;
-            if (gestureBusy) return;
+            waitUntil = now + 350;   // WhatsApp refait la mise en page après le clic
+            log("Clic fait, placement dans 350 ms");
+            return;
         }
 
         if (!prefs.getBoolean("slide", true)) { phase = 0; return; }
@@ -581,8 +584,17 @@ public class MaskService extends AccessibilityService {
         int d = goal.r.left - target;              // > 0 : trop à droite
         boolean stuck = lastLeft != Integer.MIN_VALUE && Math.abs(goal.r.left - lastLeft) < dp(2);
 
-        if (Math.abs(d) <= dp(4) || tries >= 4 || stuck) {
-            log("Placement terminé : « " + goal.name + " » à x=" + goal.r.left
+        if (Math.abs(d) <= dp(4) || tries >= 6 || stuck) {
+            if (phase == 2) {
+                // une dernière vérification une fois que WhatsApp a fini de bouger
+                phase = 3;
+                tries = 0;
+                lastLeft = Integer.MIN_VALUE;
+                waitUntil = now + 800;
+                log("Placement : « " + goal.name + " » à x=" + goal.r.left + " (cible " + target + ")");
+                return;
+            }
+            log("Macro terminée : « " + goal.name + " » à x=" + goal.r.left
                     + (stuck ? " (butée)" : "") + " — cible " + target);
             phase = 0;
             return;
@@ -740,7 +752,9 @@ public class MaskService extends AccessibilityService {
                     }
                     @Override public void onCancelled(GestureDescription g) {
                         gestureBusy = false;
-                        log("Glissement annulé par Android");
+                        if (tries > 0) tries--;
+                        log("Glissement annulé par Android, nouvel essai");
+                        schedule(120);
                     }
                 }, null);
         if (!ok) {
@@ -759,7 +773,9 @@ public class MaskService extends AccessibilityService {
             @Override public void onCompleted(GestureDescription g) { gestureBusy = false; schedule(40); }
             @Override public void onCancelled(GestureDescription g) {
                 gestureBusy = false;
-                log(name + " annulé par Android");
+                if (tries > 0) tries--;   // geste avalé pendant une animation : on réessaiera
+                log(name + " annulé par Android, nouvel essai");
+                schedule(120);
             }
         };
     }
@@ -772,9 +788,10 @@ public class MaskService extends AccessibilityService {
 
     private int maskColor(String key) {
         if (prefs.getBoolean("debug", false)) return COLOR_TEST;
-        String pref = isTopKey(key) ? KEY_TOP : "color";
+        boolean top = isTopKey(key);
         try {
-            return Color.parseColor(prefs.getString(pref, prefs.getString("color", DEFAULT_COLOR)).trim());
+            return Color.parseColor(prefs.getString(top ? KEY_TOP : "color",
+                    top ? DEFAULT_COLOR_TOP : DEFAULT_COLOR).trim());
         } catch (Exception e) {
             return Color.parseColor(DEFAULT_COLOR);
         }
@@ -874,8 +891,8 @@ public class MaskService extends AccessibilityService {
     }
 
     private String tuneHex() {
-        String pref = tuneTop ? KEY_TOP : "color";
-        return prefs.getString(pref, prefs.getString("color", DEFAULT_COLOR));
+        return tuneTop ? prefs.getString(KEY_TOP, DEFAULT_COLOR_TOP)
+                       : prefs.getString("color", DEFAULT_COLOR);
     }
 
     private android.widget.Button tuneButton(String text, int[] st, int sign, android.widget.TextView label) {

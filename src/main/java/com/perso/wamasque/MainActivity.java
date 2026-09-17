@@ -83,8 +83,8 @@ public class MainActivity extends Activity {
         root.addView(colorTopLabel);
         EditText colorTop = new EditText(this);
         colorTop.setSingleLine(true);
-        colorTop.setHint(MaskService.DEFAULT_COLOR);
-        colorTop.setText(prefs.getString("colortop", prefs.getString("color", MaskService.DEFAULT_COLOR)));
+        colorTop.setHint(MaskService.DEFAULT_COLOR_TOP);
+        colorTop.setText(prefs.getString("colortop", MaskService.DEFAULT_COLOR_TOP));
         root.addView(colorTop);
         Button saveTop = new Button(this);
         saveTop.setText("Enregistrer la couleur du haut");
