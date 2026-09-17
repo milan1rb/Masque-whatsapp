@@ -61,7 +61,7 @@ public class MainActivity extends Activity {
         color.setText(prefs.getString("color", MaskService.DEFAULT_COLOR));
         root.addView(color);
         Button pipette = new Button(this);
-        pipette.setText("Pipette : calculer la couleur exacte");
+        pipette.setText("Pipette : choisir la couleur dans WhatsApp");
         pipette.setOnClickListener(v -> {
             prefs.edit().putBoolean("calibcolor", true).apply();
             Intent wa = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
@@ -69,7 +69,7 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, "WhatsApp introuvable", Toast.LENGTH_SHORT).show();
                 return;
             }
-            Toast.makeText(this, "Mesure en cours dans WhatsApp, reviens dans 5 s", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Touche la zone à copier dans WhatsApp", Toast.LENGTH_LONG).show();
             startActivity(wa);
         });
         root.addView(pipette);
@@ -127,6 +127,24 @@ public class MainActivity extends Activity {
         });
         root.addView(launch);
         check(root, "slide", "Placer cette liste tout à gauche", true);
+        TextView swipeLabel = new TextView(this);
+        swipeLabel.setText("Distance du glissement en pixels (0 = calcul automatique)");
+        swipeLabel.setPadding(0, dp(12), 0, 0);
+        root.addView(swipeLabel);
+        EditText swipePx = new EditText(this);
+        swipePx.setSingleLine(true);
+        swipePx.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        swipePx.setText(String.valueOf(prefs.getInt("swipepx", 0)));
+        root.addView(swipePx);
+        swipePx.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
+            public void onTextChanged(CharSequence c, int a, int b, int d) { }
+            public void afterTextChanged(android.text.Editable e) {
+                int val = 0;
+                try { val = Integer.parseInt(e.toString().trim()); } catch (Exception ignored) { }
+                prefs.edit().putInt("swipepx", val).apply();
+            }
+        });
         check(root, "click", "Cliquer dessus", true);
 
         title(root, "Apprentissage");
@@ -135,16 +153,9 @@ public class MainActivity extends Activity {
         Runnable refreshLearn = () -> {
             int screens = 0;
             for (String k : prefs.getAll().keySet()) if (k.startsWith("cls:")) screens++;
-            StringBuilder cols = new StringBuilder();
-            for (String k : new String[]{"cam", "metaai", "actus", "commu"}) {
-                if (prefs.contains("col:" + k)) {
-                    cols.append("\n  ").append(k).append(" : ")
-                        .append(String.format("#%06X", prefs.getInt("col:" + k, 0) & 0xFFFFFF));
-                }
-            }
             learn.setText("Écrans WhatsApp connus : " + screens
                     + "\nCorrection apprise du glissement : " + prefs.getInt("calib", 0) + " px"
-                    + "\nCouleurs mesurées :" + (cols.length() == 0 ? " aucune" : cols));
+                    + "\nCouleur actuelle : " + prefs.getString("color", MaskService.DEFAULT_COLOR));
         };
         refreshLearn.run();
         Button reset = new Button(this);
