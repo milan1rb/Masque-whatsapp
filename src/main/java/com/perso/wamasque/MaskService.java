@@ -123,6 +123,7 @@ public class MaskService extends AccessibilityService {
         List<Rect> rects = new ArrayList<>();
 
         if (home) {
+            boolean toutesFound = false, aiFound = false;
             for (Item it : items) {
                 if (!it.visible) continue;
                 int cy = it.r.centerY();
@@ -131,13 +132,15 @@ public class MaskService extends AccessibilityService {
                         && (is(it, "Appareil photo", "Caméra", "Camera") || it.id.contains("camera"))) {
                     add(rects, target(it.node, W));
 
-                } else if (p.getBoolean("toutes", true) && cy < H * 0.35 && is(it, "Toutes")) {
+                } else if (p.getBoolean("toutes", true) && cy < H * 0.35 && starts(it, "Toutes")) {
                     add(rects, target(it.node, W));
+                    toutesFound = true;
 
                 } else if (p.getBoolean("metaai", true) && cy > H * 0.5 && it.r.left > W * 0.6
                         && it.r.width() < W * 0.4 && !it.node.isEditable()
                         && (has(it, "meta ai") || it.id.contains("meta_ai"))) {
                     add(rects, target(it.node, W));
+                    aiFound = true;
 
                 } else if (p.getBoolean("actus", true) && cy > H * 0.8 && is(it, "Actus")) {
                     add(rects, target(it.node, W));
@@ -146,6 +149,8 @@ public class MaskService extends AccessibilityService {
                     add(rects, target(it.node, W));
                 }
             }
+            if (p.getBoolean("toutes", true) && !toutesFound) maskToutesFallback(items, rects, W, H);
+            if (p.getBoolean("metaai", true) && !aiFound) maskMetaAiFallback(items, rects, W, H);
         }
 
         showRects(rects, p.getBoolean("debug", false) ? COLOR_TEST : COLOR_MASK);
@@ -154,6 +159,66 @@ public class MaskService extends AccessibilityService {
         if (home && !wanted.isEmpty() && now < selectUntil) {
             trySelect(items, wanted, W, H);
         }
+    }
+
+    // "Toutes" introuvable par son nom : on le déduit de la position de "Non lues"
+    // (la liste juste à sa gauche), sinon du premier élément de la barre des listes.
+    private void maskToutesFallback(List<Item> items, List<Rect> rects, int W, int H) {
+        for (Item it : items) {
+            if (it.r.centerY() < H * 0.35 && starts(it, "Non lues")) {
+                Rect chip = target(it.node, W);
+                int w = chip.width() * 75 / 100;
+                int right = chip.left - dp(8);
+                Rect g = new Rect(Math.max(0, right - w), chip.top, right, chip.bottom);
+                if (g.width() > dp(20)) add(rects, g);
+                return;
+            }
+        }
+        for (Item it : items) {
+            if (it.node.isScrollable() && it.r.centerY() < H * 0.35 && it.r.height() < H * 0.15
+                    && it.node.getChildCount() > 0) {
+                AccessibilityNodeInfo first = it.node.getChild(0);
+                if (first == null) return;
+                Rect r = new Rect();
+                first.getBoundsInScreen(r);
+                if (r.left < W * 0.3) add(rects, r);
+                return;
+            }
+        }
+    }
+
+    // Bouton Meta AI introuvable par son nom : il est toujours juste au-dessus
+    // du bouton vert "nouvelle discussion", on masque cette zone.
+    private void maskMetaAiFallback(List<Item> items, List<Rect> rects, int W, int H) {
+        Item fab = null;
+        for (Item it : items) {
+            Rect r = it.r;
+            if (!it.node.isClickable()) continue;
+            if (r.left < W * 0.6 || r.centerY() < H * 0.6 || r.centerY() > H * 0.9) continue;
+            if (r.width() < W * 0.09 || r.width() > W * 0.3) continue;
+            if (Math.abs(r.width() - r.height()) > r.width() * 0.3) continue;
+            if (fab == null || r.bottom > fab.r.bottom) fab = it;
+        }
+        if (fab == null) return;
+        Rect f = fab.r;
+        Rect ai = null;
+        for (Item it : items) {
+            Rect r = it.r;
+            if (it == fab || !it.node.isClickable()) continue;
+            if (r.bottom <= f.top + dp(4) && r.bottom > f.top - f.height()
+                    && r.centerX() > f.left && r.centerX() < f.right
+                    && r.width() < f.width() * 1.2 && r.width() > f.width() * 0.4) {
+                ai = new Rect(r);
+                break;
+            }
+        }
+        if (ai == null) {
+            int size = f.width() * 82 / 100;
+            int cx = f.centerX();
+            int bottom = f.top - f.height() * 30 / 100;
+            ai = new Rect(cx - size / 2, bottom - size, cx + size / 2, bottom);
+        }
+        add(rects, ai);
     }
 
     private void trySelect(List<Item> items, String wanted, int W, int H) {
