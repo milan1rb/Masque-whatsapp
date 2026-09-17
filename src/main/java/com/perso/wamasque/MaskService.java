@@ -80,6 +80,10 @@ public class MaskService extends AccessibilityService {
     private String savedCacheStr = null;
     private String pendingClass = null;
     private long pendingClassTime = 0;
+    private String currentClass = "";
+    private String pendingClick = null;
+    private long pendingClickTime = 0;
+    private int pendingFinger = 0;
     private boolean fastBroken = false;
     private long lastFullCheck = 0;
     private long lastChipScan = 0;
@@ -157,17 +161,50 @@ public class MaskService extends AccessibilityService {
     @Override
     public void onAccessibilityEvent(AccessibilityEvent e) {
         if (wm == null) return;
+        long t = SystemClock.uptimeMillis();
+
+        // Apprentissage : ce bouton mène en général à tel écran, donc on prépare les caches avant
+        if (e.getEventType() == AccessibilityEvent.TYPE_VIEW_CLICKED && isWa(e.getPackageName())) {
+            String key = clickKey(e);
+            if (key != null) {
+                pendingClick = key;
+                pendingClickTime = t;
+                if (prefs.getBoolean("learn", true) && prefs.getInt("gon:" + key, 0) >= 2) {
+                    String cls = prefs.getString("go:" + key, "");
+                    int score = prefs.getInt("cls:" + cls, 0);
+                    if (score >= 2 && imeBounds() == null) {
+                        metrics();
+                        showMasks(loadCache(cls), 0);
+                    } else if (score <= -2) {
+                        showMasks(new HashMap<>(), 0);
+                    }
+                }
+            }
+        }
+
         if (e.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             CharSequence pk = e.getPackageName();
             String cls = String.valueOf(e.getClassName());
             if (isWa(pk) && cls.startsWith("com.whatsapp")) {
                 // Écran déjà connu : on réagit tout de suite, sans attendre l'analyse
                 pendingClass = cls;
-                pendingClassTime = SystemClock.uptimeMillis();
+                pendingClassTime = t;
+                currentClass = cls;
+                if (prefs.getBoolean("learn", true) && pendingClick != null
+                        && t - pendingClickTime < 1500) {
+                    String k = "go:" + pendingClick;
+                    if (cls.equals(prefs.getString(k, ""))) {
+                        prefs.edit().putInt("gon:" + pendingClick,
+                                Math.min(5, prefs.getInt("gon:" + pendingClick, 0) + 1)).apply();
+                    } else {
+                        prefs.edit().putString(k, cls).putInt("gon:" + pendingClick, 1).apply();
+                    }
+                    pendingClick = null;
+                }
                 int score = prefs.getInt("cls:" + cls, 0);
                 if (score >= 2 && imeBounds() == null) {
                     metrics();
-                    showMasks(loadCache(), 0);
+                    showMasks(loadCache(cls), 0);
                 } else if (score <= -2) {
                     showMasks(new HashMap<>(), 0);
                 }
@@ -176,6 +213,14 @@ public class MaskService extends AccessibilityService {
             }
         }
         schedule(30);
+    }
+
+    private String clickKey(AccessibilityEvent e) {
+        AccessibilityNodeInfo src = e.getSource();
+        String id = src == null || src.getViewIdResourceName() == null ? "" : src.getViewIdResourceName();
+        String txt = e.getText() == null || e.getText().isEmpty() ? "" : String.valueOf(e.getText().get(0));
+        String key = !id.isEmpty() ? id : norm(txt);
+        return key.isEmpty() ? null : key;
     }
 
     private void schedule(long delay) {
@@ -584,6 +629,18 @@ public class MaskService extends AccessibilityService {
         int d = goal.r.left - target;              // > 0 : trop à droite
         boolean stuck = lastLeft != Integer.MIN_VALUE && Math.abs(goal.r.left - lastLeft) < dp(2);
 
+        // Apprentissage : combien la barre a réellement bougé pour le geste demandé
+        if (prefs.getBoolean("learn", true) && lastLeft != Integer.MIN_VALUE && pendingFinger > 0) {
+            int moved = Math.abs(lastLeft - goal.r.left);
+            if (moved > 40) {
+                int measured = (int) Math.round(moved * 1000.0 / pendingFinger);
+                int gain = prefs.getInt("gain", 1000);
+                int next = Math.max(500, Math.min(1600, (gain * 3 + measured) / 4));
+                prefs.edit().putInt("gain", next).apply();
+            }
+            pendingFinger = 0;
+        }
+
         if (Math.abs(d) <= dp(4) || tries >= 6 || stuck) {
             if (phase == 2) {
                 // une dernière vérification une fois que WhatsApp a fini de bouger
@@ -711,7 +768,11 @@ public class MaskService extends AccessibilityService {
     // Mouvement rapide puis doigt immobile avant de relâcher (pas d'effet "lancer"),
     // loin des bords de l'écran (geste retour d'Android).
     private void swipe(int y, int dist) {
-        swipeFinger(y, dist, ViewConfiguration.get(this).getScaledTouchSlop());
+        int slop = ViewConfiguration.get(this).getScaledTouchSlop();
+        int gain = prefs.getInt("gain", 1000);
+        int finger = prefs.getBoolean("learn", true) ? (int) Math.round(dist * 1000.0 / gain) : dist;
+        pendingFinger = Math.abs(finger);
+        swipeFinger(y, finger, slop);
     }
 
     // Glissement du doigt d'une distance exacte, sans correction
@@ -1030,8 +1091,8 @@ public class MaskService extends AccessibilityService {
         }
     }
 
-    private String cacheKey() {
-        return "cache:" + W + "x" + H;
+    private String cacheKey(String cls) {
+        return "cache:" + (cls == null || cls.isEmpty() ? "?" : cls) + ":" + W + "x" + H;
     }
 
     private void saveCache(Map<String, Rect> want) {
@@ -1045,13 +1106,15 @@ public class MaskService extends AccessibilityService {
         String str = sb.toString();
         if (!str.equals(savedCacheStr)) {
             savedCacheStr = str;
-            prefs.edit().putString(cacheKey(), str).apply();
+            prefs.edit().putString(cacheKey(currentClass), str).putString(cacheKey(""), str).apply();
         }
     }
 
-    private Map<String, Rect> loadCache() {
+    private Map<String, Rect> loadCache(String cls) {
         Map<String, Rect> m = new HashMap<>();
-        for (String part : prefs.getString(cacheKey(), "").split(";")) {
+        String str = prefs.getString(cacheKey(cls), "");
+        if (str.isEmpty()) str = prefs.getString(cacheKey(""), "");
+        for (String part : str.split(";")) {
             String[] kv = part.split(":");
             if (kv.length != 2 || !prefs.getBoolean(kv[0], true)) continue;
             String[] n = kv[1].split(",");

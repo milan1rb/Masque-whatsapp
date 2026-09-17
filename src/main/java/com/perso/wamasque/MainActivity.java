@@ -189,12 +189,17 @@ public class MainActivity extends Activity {
         check(root, "click", "Cliquer dessus", true);
 
         title(root, "Apprentissage");
+        check(root, "learn", "Apprentissage activé (précision et rapidité)", true);
         TextView learn = new TextView(this);
         root.addView(learn);
         Runnable refreshLearn = () -> {
             int screens = 0;
             for (String k : prefs.getAll().keySet()) if (k.startsWith("cls:")) screens++;
+            int shortcuts = 0;
+            for (String k : prefs.getAll().keySet()) if (k.startsWith("go:")) shortcuts++;
             learn.setText("Écrans WhatsApp connus : " + screens
+                    + "\nBoutons anticipés : " + shortcuts
+                    + "\nPrécision du glissement : " + prefs.getInt("gain", 1000) + " ‰"
                     + "\nCouleur actuelle : " + prefs.getString("color", MaskService.DEFAULT_COLOR));
         };
         refreshLearn.run();
@@ -203,7 +208,8 @@ public class MainActivity extends Activity {
         reset.setOnClickListener(v -> {
             SharedPreferences.Editor ed = prefs.edit();
             for (String k : prefs.getAll().keySet()) {
-                if (k.startsWith("cls:") || k.startsWith("cache:") || k.startsWith("col:") || k.equals("calib")) ed.remove(k);
+                if (k.startsWith("cls:") || k.startsWith("cache:") || k.startsWith("go:")
+                        || k.startsWith("gon:") || k.equals("gain")) ed.remove(k);
             }
             ed.apply();
             refreshLearn.run();
