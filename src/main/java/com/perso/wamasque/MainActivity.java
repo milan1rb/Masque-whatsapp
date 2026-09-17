@@ -49,6 +49,8 @@ public class MainActivity extends Activity {
         check(root, "metaai", "Bouton Meta AI (rond violet)", true);
         check(root, "actus", "Onglet Actus", true);
         check(root, "commu", "Onglet Communautés", true);
+        check(root, "disctxt", "Texte « Discussions » en bas", true);
+        check(root, "appelstxt", "Texte « Appels » en bas", true);
         check(root, "debug", "Mode test : masques rouges transparents", false);
 
         TextView colorLabel = new TextView(this);
@@ -140,24 +142,25 @@ public class MainActivity extends Activity {
         });
         root.addView(launch);
         check(root, "slide", "Placer cette liste tout à gauche", true);
-        TextView swipeLabel = new TextView(this);
-        swipeLabel.setText("Distance du glissement en pixels (utilisée au lancement et pour revenir en place)");
-        swipeLabel.setPadding(0, dp(12), 0, 0);
-        root.addView(swipeLabel);
-        EditText swipePx = new EditText(this);
-        swipePx.setSingleLine(true);
-        swipePx.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        swipePx.setText(String.valueOf(prefs.getInt("swipepx", 0)));
-        root.addView(swipePx);
-        swipePx.addTextChangedListener(new android.text.TextWatcher() {
+        TextView posLabel = new TextView(this);
+        posLabel.setText("Position X voulue de la liste, en pixels depuis le bord gauche");
+        posLabel.setPadding(0, dp(12), 0, 0);
+        root.addView(posLabel);
+        EditText posX = new EditText(this);
+        posX.setSingleLine(true);
+        posX.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        posX.setText(String.valueOf(prefs.getInt("posx", 20)));
+        root.addView(posX);
+        posX.addTextChangedListener(new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
             public void onTextChanged(CharSequence c, int a, int b, int d) { }
             public void afterTextChanged(android.text.Editable e) {
-                int val = 0;
+                int val = 20;
                 try { val = Integer.parseInt(e.toString().trim()); } catch (Exception ignored) { }
-                prefs.edit().putInt("swipepx", val).apply();
+                prefs.edit().putInt("posx", val).apply();
             }
         });
+
         check(root, "click", "Cliquer dessus", true);
 
         title(root, "Apprentissage");

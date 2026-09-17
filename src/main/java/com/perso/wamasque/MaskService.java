@@ -38,7 +38,7 @@ import java.util.Map;
 public class MaskService extends AccessibilityService {
 
     static final String PREFS = "config";
-    static final String DEFAULT_COLOR = "#0B1014";
+    static final String DEFAULT_COLOR = "#080E15";
     static volatile boolean running = false;
     static volatile boolean forceMacro = false;
     private static volatile String lastDump = "(aucune capture de l'écran principal de WhatsApp)";
@@ -46,7 +46,7 @@ public class MaskService extends AccessibilityService {
     private static String lastLogMsg = "";
 
     private static final int COLOR_TEST = 0x88FF0000;
-    private static final String[] KEYS = {"cam", "metaai", "actus", "commu"};
+    private static final String[] KEYS = {"cam", "metaai", "actus", "commu", "disctxt", "appelstxt"};
 
     private WindowManager wm;
     private SharedPreferences prefs;
@@ -63,8 +63,8 @@ public class MaskService extends AccessibilityService {
     private long phaseDeadline = 0;
     private long waitUntil = 0;
     private boolean clickAfter = true;
-    private boolean resetAlways = false;
-    private int resetLeft = 0;
+    private int tries = 0;
+    private int lastLeft = Integer.MIN_VALUE;
     private boolean gestureBusy = false;
     private long gestureStart = 0;
 
@@ -396,8 +396,16 @@ public class MaskService extends AccessibilityService {
         for (String id : new String[]{"navigation_bar_item_small_label_view", "navigation_bar_item_large_label_view"}) {
             for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByViewId(px + id)) {
                 String t = norm(n.getText() == null ? "" : n.getText().toString());
-                if (t.equals("discussions")) disc = true;
-                else if (t.equals("appels")) { calls = true; if (n.isSelected()) sc.callsSelected = true; }
+                if (t.equals("discussions")) {
+                    disc = true;
+                    if (prefs.getBoolean("disctxt", true) && n.isVisibleToUser())
+                        sc.want.put("disctxt", bounds(n));
+                } else if (t.equals("appels")) {
+                    calls = true;
+                    if (n.isSelected()) sc.callsSelected = true;
+                    if (prefs.getBoolean("appelstxt", true) && n.isVisibleToUser())
+                        sc.want.put("appelstxt", bounds(n));
+                }
                 else if (t.equals("actus")) tabs.put("actus", bounds(clickableNode(n)));
                 else if (t.startsWith("communaut")) tabs.put("commu", bounds(clickableNode(n)));
             }
@@ -464,6 +472,12 @@ public class MaskService extends AccessibilityService {
                 sc.want.put("actus", bounds(clickableNode(it.node)));
             } else if (prefs.getBoolean("commu", true) && cy > H * 0.8 && starts(it, "Communaut")) {
                 sc.want.put("commu", bounds(clickableNode(it.node)));
+            } else if (prefs.getBoolean("disctxt", true) && cy > H * 0.8 && is(it, "Discussions")
+                    && !it.text.isEmpty()) {
+                sc.want.put("disctxt", new Rect(it.r));
+            } else if (prefs.getBoolean("appelstxt", true) && cy > H * 0.8 && is(it, "Appels")
+                    && !it.text.isEmpty()) {
+                sc.want.put("appelstxt", new Rect(it.r));
             }
         }
         sc.chipItems = items;
@@ -500,8 +514,8 @@ public class MaskService extends AccessibilityService {
     private void startMacro(long now, boolean withClick) {
         phase = 1;
         clickAfter = withClick;
-        resetAlways = false;
-        resetLeft = 0;
+        tries = 0;
+        lastLeft = Integer.MIN_VALUE;
         phaseDeadline = now + 10000;
         waitUntil = now;
     }
@@ -522,55 +536,79 @@ public class MaskService extends AccessibilityService {
         }
         if (chips.isEmpty()) { log("Barre des listes introuvable"); return; }
 
-        int y = chips.get(0).r.centerY();
-        int fixed = prefs.getInt("swipepx", 0);
-        boolean slide = prefs.getBoolean("slide", true);
+        String wanted = norm(prefs.getString("liste", ""));
+        Chip goal = findGoal(chips, wanted);
 
         if (phase == 1) {
-            // 1. clic sur la liste voulue (sert uniquement à ça)
             if (clickAfter && prefs.getBoolean("click", true)) {
-                String wanted = norm(prefs.getString("liste", ""));
-                Chip goal = findGoal(chips, wanted);
                 if (goal == null) log("Liste « " + wanted + " » pas visible — " + describe(chips));
                 else if (goal.selected) log("Déjà sélectionnée : " + goal.name);
-                else { click(goal); }
+                else click(goal);
             }
-            // 2. on repart du début de la barre si besoin
-            resetLeft = (resetAlways || !toutesVisible(chips)) ? 3 : 0;
             phase = 2;
+            tries = 0;
+            lastLeft = Integer.MIN_VALUE;
             if (gestureBusy) return;
         }
 
-        if (phase == 2) {
-            if (!slide || fixed <= 0) {
-                if (fixed <= 0) log("Distance de glissement non réglée dans l'app");
-                phase = 0;
-                return;
-            }
-            if (resetLeft > 0) {
-                resetLeft--;
-                swipeRaw(y, -(int) (W * 0.7));   // vers la droite : retour au début de la barre
+        if (!prefs.getBoolean("slide", true)) { phase = 0; return; }
+
+        if (goal == null) {
+            // la liste est sortie de l'écran : on fait défiler la barre pour la retrouver
+            if (tries < 5) {
+                tries++;
+                int dir = toutesVisible(chips) ? 1 : -1;
+                swipeOnBar(chips, dir * W / 2);
                 waitUntil = now;
-                return;
+            } else {
+                log("« " + wanted + " » introuvable — " + describe(chips));
+                phase = 0;
             }
-            log("Glissement de " + fixed + " px");
-            swipeRaw(y, fixed);
-            phase = 0;
+            return;
         }
+
+        int target = prefs.getInt("posx", 20);
+        int d = goal.r.left - target;              // > 0 : trop à droite
+        boolean stuck = lastLeft != Integer.MIN_VALUE && Math.abs(goal.r.left - lastLeft) < dp(2);
+
+        if (Math.abs(d) <= dp(4) || tries >= 4 || stuck) {
+            log("Placement terminé : « " + goal.name + " » à x=" + goal.r.left
+                    + (stuck ? " (butée)" : "") + " — cible " + target);
+            phase = 0;
+            return;
+        }
+        tries++;
+        lastLeft = goal.r.left;
+        log("Glissement de " + d + " px (« " + goal.name + " » x=" + goal.r.left + " → " + target + ")");
+        swipeOnBar(chips, d);
+        waitUntil = now;
     }
 
-    // Si la barre part vers la droite et reste immobile 2 s, on la remet en place
+    // Le glissement se fait toujours sur la ligne des listes, jamais ailleurs
+    private void swipeOnBar(List<Chip> chips, int dist) {
+        int top = Integer.MAX_VALUE, bottom = 0;
+        for (Chip c : chips) {
+            top = Math.min(top, c.r.top);
+            bottom = Math.max(bottom, c.r.bottom);
+        }
+        swipe((top + bottom) / 2, dist);
+    }
+
+    // Si la liste s'éloigne vers la droite et que la barre reste immobile 2 s, on la remet en place
     private void watchdog(List<Chip> chips, List<Item> items, long now) {
-        if (chips.isEmpty() || gestureBusy || prefs.getInt("swipepx", 0) <= 0) {
+        if (chips.isEmpty() || gestureBusy || !prefs.getBoolean("slide", true)) {
             misalignedSince = 0;
             return;
         }
-        if (!toutesVisible(chips)) {
+        Chip goal = findGoal(chips, norm(prefs.getString("liste", "")));
+        int target = prefs.getInt("posx", 20);
+        int pos = goal == null ? chips.get(0).r.left : goal.r.left;
+        boolean off = goal == null ? toutesVisible(chips) : goal.r.left > target + dp(6);
+        if (!off) {
             misalignedSince = 0;
             watchPos = Integer.MIN_VALUE;
             return;
         }
-        int pos = chips.get(0).r.left;
         if (Math.abs(pos - watchPos) > dp(2)) {   // la barre bouge encore : on attend
             watchPos = pos;
             misalignedSince = now;
@@ -580,7 +618,6 @@ public class MaskService extends AccessibilityService {
             watchPos = Integer.MIN_VALUE;
             log("Retour à la position de base");
             startMacro(now, false);
-            resetAlways = true;
         }
         schedule(250);
     }
@@ -988,7 +1025,8 @@ public class MaskService extends AccessibilityService {
                 }
                 continue;
             }
-            boolean tab = key.equals("actus") || key.equals("commu");
+            boolean tab = key.equals("actus") || key.equals("commu")
+                    || key.equals("disctxt") || key.equals("appelstxt");
             Rect g = tab ? new Rect(r.left, r.top + dp(1), r.right, r.bottom)
                          : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
 
