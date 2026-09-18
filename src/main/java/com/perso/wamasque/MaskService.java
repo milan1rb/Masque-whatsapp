@@ -133,6 +133,7 @@ public class MaskService extends AccessibilityService {
 
     static class Scan {
         boolean home, bigOther, selectionMode, callsSelected;
+        List<Rect> system = new ArrayList<>();
         Map<String, Rect> want = new HashMap<>();
         List<Rect> popups = new ArrayList<>();
         List<Item> chipItems = new ArrayList<>();
@@ -436,6 +437,7 @@ public class MaskService extends AccessibilityService {
         }
         // attaché à la fenêtre : les menus passent naturellement au-dessus, rien à retirer
         Map<String, Rect> want = masks;   // jamais retirés : ils restent identiques
+        if (!sc.system.isEmpty()) want = withoutPopups(want, sc.system);   // laisser passer les notifications
         noteMotion(now, want);
         drawOnDisplay = !attached;
         Rect ime = imeBounds();
@@ -548,6 +550,14 @@ public class MaskService extends AccessibilityService {
         Scan sc = new Scan();
         List<AccessibilityWindowInfo> windows = getWindows();
         for (AccessibilityWindowInfo w : windows) {
+            // Fenêtres du système : notification affichée en haut, volet déroulé…
+            // On ne masque rien par-dessus, sinon on cacherait la notification.
+            if (w.getType() == AccessibilityWindowInfo.TYPE_SYSTEM) {
+                Rect sb = new Rect();
+                w.getBoundsInScreen(sb);
+                if (sb.height() > dp(48)) sc.system.add(sb);   // ni la barre d'état ni la barre de navigation
+                continue;
+            }
             if (w.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) continue;
             AccessibilityNodeInfo root = w.getRoot();
             if (root == null || !isWa(root.getPackageName())) continue;
