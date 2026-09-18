@@ -340,8 +340,13 @@ public class MaskService extends AccessibilityService {
 
         if (!sc.home) {
             learnClass(now, false, sc);
-            if (!sc.bigOther && !sc.popups.isEmpty() && now - lastHomeTime < 60000) {
-                // Menu ouvert par-dessus l'écran principal : on garde les caches
+            if (!sc.bigOther && now - lastHomeTime < 1500) {
+                // fiche contact, menu, ou simple hoquet d'analyse pendant une animation :
+                // l'écran principal est toujours là derrière, on ne touche à rien
+                if (!dimMasks) {
+                    dimMasks = true;
+                    if (canvas != null) canvas.invalidate();
+                }
                 showMasks(lastWant, 0);
             } else {
                 showMasks(new HashMap<>(), 0);
@@ -504,9 +509,11 @@ public class MaskService extends AccessibilityService {
                 }
             }
             // Autre fenêtre : menu, boîte de dialogue ou autre écran
+            Rect wbounds = new Rect();
+            w.getBoundsInScreen(wbounds);
+            if ((long) wbounds.width() * wbounds.height() > (long) (W * H * 0.8)) sc.bigOther = true;
             List<Item> list = new ArrayList<>();
             collect(root, 0, list, 90);
-            if (list.size() >= 90) sc.bigOther = true;
             Rect b = null;
             for (Item it : list) {
                 if (!it.visible || it.r.isEmpty() || it.text.isEmpty()) continue;
