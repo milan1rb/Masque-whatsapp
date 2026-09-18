@@ -181,6 +181,14 @@ public class MaskService extends AccessibilityService {
         // Apprentissage : ce bouton mène en général à tel écran, donc on prépare les caches avant
         if (e.getEventType() == AccessibilityEvent.TYPE_VIEW_CLICKED && isWa(e.getPackageName())) {
             String key = clickKey(e);
+            // Une ligne de discussion ouvre TOUJOURS une conversation : on retire les caches
+            // à l'instant de l'appui, sans attendre que la nouvelle fenêtre arrive.
+            if (key != null && (key.endsWith("contact_row_container")
+                    || key.endsWith("conversations_row_header")
+                    || key.endsWith("conversations_archive_header"))) {
+                suppressUntil = t + 700;
+                showMasks(new HashMap<>(), 0);
+            }
             if (key != null) {
                 log("Appui sur " + key.replace("com.whatsapp:id/", ""));
                 pendingClick = key;
