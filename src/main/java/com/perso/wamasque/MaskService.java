@@ -8,6 +8,8 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.graphics.Color;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
@@ -89,6 +91,7 @@ public class MaskService extends AccessibilityService {
     private long lastFullCheck = 0;
     private long lastChipScan = 0;
     // Apprentissage de la couleur exacte du fond
+    private MaskCanvas canvas = null;
     private View picker = null;
     private View tuner = null;
     private boolean tuneTop = false;
@@ -264,6 +267,10 @@ public class MaskService extends AccessibilityService {
             try { wm.removeView(v); } catch (Exception ignored) { }
         }
         slots.clear();
+        if (canvas != null) {
+            try { wm.removeView(canvas); } catch (Exception ignored) { }
+            canvas = null;
+        }
         super.onDestroy();
     }
 
@@ -633,8 +640,8 @@ public class MaskService extends AccessibilityService {
             phase = 2;
             tries = 0;
             lastLeft = Integer.MIN_VALUE;
-            waitUntil = now + 350;   // WhatsApp refait la mise en page après le clic
-            log("Clic fait, placement dans 350 ms");
+            waitUntil = now + 150;   // WhatsApp refait la mise en page après le clic
+            log("Clic fait, placement dans 150 ms");
             return;
         }
 
@@ -670,13 +677,13 @@ public class MaskService extends AccessibilityService {
             pendingFinger = 0;
         }
 
-        if (Math.abs(d) <= dp(4) || tries >= 6 || stuck) {
+        if (Math.abs(d) <= dp(6) || tries >= 6 || stuck) {
             if (phase == 2) {
                 // une dernière vérification une fois que WhatsApp a fini de bouger
                 phase = 3;
                 tries = 0;
                 lastLeft = Integer.MIN_VALUE;
-                waitUntil = now + 800;
+                waitUntil = now + 350;
                 log("Placement : « " + goal.name + " » à x=" + goal.r.left + " (cible " + target + ")");
                 return;
             }
@@ -824,11 +831,11 @@ public class MaskService extends AccessibilityService {
         move.moveTo(x0, y);
         move.lineTo(x1, y);
         GestureDescription.StrokeDescription s1 =
-                new GestureDescription.StrokeDescription(move, 0, 200, true);
+                new GestureDescription.StrokeDescription(move, 0, 150, true);
         Path hold = new Path();
         hold.moveTo(x1, y);
         hold.lineTo(x1 + step, y);
-        GestureDescription.StrokeDescription s2 = s1.continueStroke(hold, 0, 110, false);
+        GestureDescription.StrokeDescription s2 = s1.continueStroke(hold, 0, 90, false);
 
         startGesture();
         boolean ok = dispatchGesture(new GestureDescription.Builder().addStroke(s1).build(),
@@ -997,7 +1004,7 @@ public class MaskService extends AccessibilityService {
             prefs.edit().putString(tuneTop ? KEY_TOP : "color", hex).apply();
             painted.clear();
             label.setText((tuneTop ? "Haut : " : "Bas : ") + hex);
-            showMasks(lastWant, 0);
+            if (canvas != null) canvas.invalidate();
         });
         return b;
     }
@@ -1156,9 +1163,77 @@ public class MaskService extends AccessibilityService {
         return m;
     }
 
-    // Une fenêtre fixe par élément, cachée/affichée sur place, sans animation
+    class MaskCanvas extends View {
+        private Map<String, Rect> shown = new HashMap<>();
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        MaskCanvas(MaskService ctx) {
+            super(ctx);
+            setWillNotDraw(false);
+        }
+
+        void set(Map<String, Rect> want) {
+            if (want.equals(shown)) return;
+            shown = new HashMap<>(want);
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            for (Map.Entry<String, Rect> e : shown.entrySet()) {
+                Rect g = maskRect(e.getKey(), e.getValue());
+                paint.setColor(maskColor(e.getKey()));
+                if (e.getKey().equals("metaai")) {
+                    c.drawRoundRect(g.left, g.top, g.right, g.bottom, dp(18), dp(18), paint);
+                } else {
+                    c.drawRect(g.left, g.top, g.right, g.bottom, paint);
+                }
+            }
+        }
+    }
+
+    private Rect maskRect(String key, Rect r) {
+        boolean tab = key.equals("actus") || key.equals("commu")
+                || key.equals("disctxt") || key.equals("appelstxt");
+        int m = dp(2);
+        return tab ? new Rect(r.left, r.top + dp(1), r.right, r.bottom)
+                   : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
+    }
+
+    private void ensureCanvas() {
+        if (canvas != null || wm == null) return;
+        MaskCanvas c = new MaskCanvas(this);
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT);
+        lp.gravity = Gravity.TOP | Gravity.START;
+        lp.x = 0;
+        lp.y = 0;
+        lp.windowAnimations = 0;
+        if (Build.VERSION.SDK_INT >= 28) {
+            lp.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        }
+        if (Build.VERSION.SDK_INT >= 30) lp.setFitInsetsTypes(0);
+        try {
+            wm.addView(c, lp);
+            canvas = c;
+        } catch (Exception e) {
+            log("Calque impossible : " + e);
+        }
+    }
+
+    // Le dessin se fait dans une seule fenêtre transparente (instantané, une image suffit) ;
+    // les petites fenêtres ci-dessous ne servent plus qu'à bloquer le toucher.
     private void showMasks(Map<String, Rect> want, int unusedColor) {
         if (wm == null) return;
+        ensureCanvas();
+        if (canvas != null) canvas.set(want);
         int m = dp(2);
         for (String key : KEYS) {
             Rect r = want.get(key);
@@ -1173,10 +1248,7 @@ public class MaskService extends AccessibilityService {
                 }
                 continue;
             }
-            boolean tab = key.equals("actus") || key.equals("commu")
-                    || key.equals("disctxt") || key.equals("appelstxt");
-            Rect g = tab ? new Rect(r.left, r.top + dp(1), r.right, r.bottom)
-                         : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
+            Rect g = maskRect(key, r);
 
             if (v == null) {
                 v = new View(this);
@@ -1209,17 +1281,7 @@ public class MaskService extends AccessibilityService {
     private final Map<String, Integer> painted = new HashMap<>();
 
     private void paint(View v, String key, int color) {
-        Integer prev = painted.get(key);
-        if (prev != null && prev == color) return;
-        painted.put(key, color);
-        if (key.equals("metaai")) {
-            GradientDrawable bg = new GradientDrawable();
-            bg.setColor(color);
-            bg.setCornerRadius(dp(18));
-            v.setBackground(bg);
-        } else {
-            v.setBackgroundColor(color);
-        }
+        v.setBackgroundColor(Color.TRANSPARENT);   // le visuel est dessiné par le calque
     }
 
     private WindowManager.LayoutParams params(Rect r) {
