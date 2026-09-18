@@ -89,6 +89,8 @@ public class MaskService extends AccessibilityService {
     private int pendingFinger = 0;
     private long suppressUntil = 0;
     private boolean fastBroken = false;
+    private int fastFails = 0;
+    private long fastBrokenSince = 0;
     private long lastFullCheck = 0;
     private long lastChipScan = 0;
     // Apprentissage de la couleur exacte du fond
@@ -351,6 +353,7 @@ public class MaskService extends AccessibilityService {
 
         lastHomeTime = now;
         suppressUntil = 0;
+        fastFails = 0;
         learnClass(now, true, sc);
 
         if (now - lastDumpTime > 60000) {
@@ -375,8 +378,7 @@ public class MaskService extends AccessibilityService {
         showMasks(want, 0);
 
         List<Chip> chips = findChips(sc.chipItems);
-        if (chips.isEmpty() && (phase != 0 || prefs.getBoolean("slide", true))
-                && now - lastChipScan > 1000) {
+        if (chips.isEmpty() && phase != 0 && now - lastChipScan > 1000) {
             lastChipScan = now;
             List<Item> all = new ArrayList<>();
             collect(sc.homeRoot, 0, all, 900);
@@ -449,6 +451,11 @@ public class MaskService extends AccessibilityService {
     // ---------- Analyse de l'écran ----------
 
     private Scan scan(long now) {
+        // on retente le mode rapide de temps en temps : une transition peut l'avoir mis en défaut
+        if (fastBroken && now - fastBrokenSince > 60000) {
+            fastBroken = false;
+            fastFails = 0;
+        }
         Scan sc = new Scan();
         List<AccessibilityWindowInfo> windows = getWindows();
         for (AccessibilityWindowInfo w : windows) {
@@ -491,9 +498,12 @@ public class MaskService extends AccessibilityService {
                 List<Item> list = new ArrayList<>();
                 collect(root, 0, list, 700);
                 if (isHome(list)) {
-                    fastBroken = true;
-                    log("Identifiants WhatsApp inconnus : passage en analyse complète");
-                    schedule(30);
+                    if (++fastFails >= 3) {
+                        fastBroken = true;
+                        fastBrokenSince = now;
+                        log("Identifiants WhatsApp inconnus : passage en analyse complète");
+                        schedule(30);
+                    }
                     break;
                 }
             }
@@ -505,7 +515,7 @@ public class MaskService extends AccessibilityService {
     private boolean fastHome(AccessibilityNodeInfo root, String wp, Scan sc) {
         String px = wp + ":id/";
         List<AccessibilityNodeInfo> nav = root.findAccessibilityNodeInfosByViewId(px + "bottom_nav");
-        if (nav == null || nav.isEmpty() || !nav.get(0).isVisibleToUser()) return false;
+        if (nav == null || nav.isEmpty() || bounds(nav.get(0)).isEmpty()) return false;
 
         boolean disc = false, calls = false;
         Map<String, Rect> tabs = new HashMap<>();
