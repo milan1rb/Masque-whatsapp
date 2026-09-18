@@ -88,6 +88,7 @@ public class MaskService extends AccessibilityService {
     private String pendingClick = null;
     private long pendingClickTime = 0;
     private int pendingFinger = 0;
+    private int pendingDist = 0;
     private long suppressUntil = 0;
     private boolean fastBroken = false;
     private int fastFails = 0;
@@ -578,7 +579,7 @@ public class MaskService extends AccessibilityService {
         if (prefs.getBoolean("metaai", true) && !sc.callsSelected) {
             for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByViewId(px + "extended_mini_fab")) {
                 Rect r = bounds(n);
-                if (n.isVisibleToUser() && r.width() < W * 0.4) sc.want.put("metaai", r);
+                if (n.isVisibleToUser() && r.width() < W * 0.8) sc.want.put("metaai", r);
             }
         }
 
@@ -620,7 +621,7 @@ public class MaskService extends AccessibilityService {
                     && (it.id.endsWith("menuitem_camera") || is(it, "Caméra", "Appareil photo"))) {
                 sc.want.put("cam", new Rect(it.r));
             } else if (prefs.getBoolean("metaai", true) && !sc.callsSelected && cy > H * 0.4
-                    && it.r.width() < W * 0.4
+                    && it.r.width() < W * 0.8
                     && (it.id.endsWith("extended_mini_fab") || has(it, "message à l'ia") || has(it, "meta ai"))
                     && !it.node.isEditable()) {
                 if (!sc.want.containsKey("metaai")) sc.want.put("metaai", bounds(clickableNode(it.node)));
@@ -732,11 +733,20 @@ public class MaskService extends AccessibilityService {
         // Apprentissage : combien la barre a réellement bougé pour le geste demandé
         if (prefs.getBoolean("learn", true) && lastLeft != Integer.MIN_VALUE && pendingFinger > 0) {
             int moved = Math.abs(lastLeft - goal.r.left);
-            if (moved > 40) {
-                int measured = (int) Math.round(moved * 1000.0 / pendingFinger);
-                int gain = prefs.getInt("gain", 1000);
-                int next = Math.max(500, Math.min(1600, (gain * 3 + measured) / 4));
-                prefs.edit().putInt("gain", next).apply();
+            double g = prefs.getInt("gain", 1000) / 1000.0;
+            int b = prefs.getInt("loss", 0);
+            if (moved > 30) {
+                if (pendingDist >= 200 && pendingFinger > b) {
+                    // grands déplacements : on ajuste le rapport doigt / barre
+                    double measured = moved / (double) (pendingFinger - b);
+                    int next = (int) Math.round((g * 3 + measured) / 4 * 1000);
+                    prefs.edit().putInt("gain", Math.max(500, Math.min(1600, next))).apply();
+                } else {
+                    // petits déplacements : on ajuste la perte de début de geste
+                    int measured = (int) Math.round(pendingFinger - moved / g);
+                    int next = (int) Math.round((b + measured) / 2.0);
+                    prefs.edit().putInt("loss", Math.max(0, Math.min(150, next))).apply();
+                }
             }
             pendingFinger = 0;
         }
@@ -869,9 +879,13 @@ public class MaskService extends AccessibilityService {
     // loin des bords de l'écran (geste retour d'Android).
     private void swipe(int y, int dist) {
         int slop = ViewConfiguration.get(this).getScaledTouchSlop();
-        int gain = prefs.getInt("gain", 1000);
-        int finger = prefs.getBoolean("learn", true) ? (int) Math.round(dist * 1000.0 / gain) : dist;
+        boolean learn = prefs.getBoolean("learn", true);
+        double g = prefs.getInt("gain", 1000) / 1000.0;
+        int b = learn ? prefs.getInt("loss", 0) : 0;
+        int finger = learn ? (int) Math.round(dist / g) : dist;
+        finger += finger >= 0 ? b : -b;
         pendingFinger = Math.abs(finger);
+        pendingDist = Math.abs(dist);
         swipeFinger(y, finger, slop);
     }
 
@@ -1248,7 +1262,8 @@ public class MaskService extends AccessibilityService {
                 Rect g = maskRect(e.getKey(), e.getValue());
                 paint.setColor(maskColor(e.getKey()));
                 if (e.getKey().equals("metaai")) {
-                    c.drawRoundRect(g.left, g.top, g.right, g.bottom, dp(18), dp(18), paint);
+                    float rad = g.width() > g.height() * 1.4f ? g.height() / 2f : dp(18);
+                    c.drawRoundRect(g.left, g.top, g.right, g.bottom, rad, rad, paint);
                 } else {
                     c.drawRect(g.left, g.top, g.right, g.bottom, paint);
                 }

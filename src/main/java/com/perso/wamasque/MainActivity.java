@@ -199,7 +199,8 @@ public class MainActivity extends Activity {
             for (String k : prefs.getAll().keySet()) if (k.startsWith("go:")) shortcuts++;
             learn.setText("Écrans WhatsApp connus : " + screens
                     + "\nBoutons anticipés : " + shortcuts
-                    + "\nPrécision du glissement : " + prefs.getInt("gain", 1000) + " ‰"
+                    + "\nPrécision du glissement : " + prefs.getInt("gain", 1000) + " ‰, perte "
+                    + prefs.getInt("loss", 0) + " px"
                     + "\nCouleur actuelle : " + prefs.getString("color", MaskService.DEFAULT_COLOR));
         };
         refreshLearn.run();
@@ -209,7 +210,7 @@ public class MainActivity extends Activity {
             SharedPreferences.Editor ed = prefs.edit();
             for (String k : prefs.getAll().keySet()) {
                 if (k.startsWith("cls:") || k.startsWith("cache:") || k.startsWith("go:")
-                        || k.startsWith("gon:") || k.equals("gain")) ed.remove(k);
+                        || k.startsWith("gon:") || k.equals("gain") || k.equals("loss")) ed.remove(k);
             }
             ed.apply();
             refreshLearn.run();
