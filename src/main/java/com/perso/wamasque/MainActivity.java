@@ -228,22 +228,21 @@ public class MainActivity extends Activity {
             }
         });
 
-        check(root, "tmargin", "Marge supplémentaire pendant les transitions", true);
-        TextView tmLabel = new TextView(this);
-        tmLabel.setText("Taille de cette marge de transition, en pixels");
-        root.addView(tmLabel);
-        EditText tm = new EditText(this);
-        tm.setSingleLine(true);
-        tm.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        tm.setText(String.valueOf(prefs.getInt("tmarginpx", 45)));
-        root.addView(tm);
-        tm.addTextChangedListener(new android.text.TextWatcher() {
+        TextView dimLabel = new TextView(this);
+        dimLabel.setText("Assombrissement des caches quand une fenêtre s'ouvre par-dessus (%)");
+        root.addView(dimLabel);
+        EditText dim = new EditText(this);
+        dim.setSingleLine(true);
+        dim.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        dim.setText(String.valueOf(prefs.getInt("dimpct", 45)));
+        root.addView(dim);
+        dim.addTextChangedListener(new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
             public void onTextChanged(CharSequence c, int a, int b, int d) { }
             public void afterTextChanged(android.text.Editable e) {
                 int val = 45;
                 try { val = Integer.parseInt(e.toString().trim()); } catch (Exception ignored) { }
-                prefs.edit().putInt("tmarginpx", Math.max(0, Math.min(150, val))).apply();
+                prefs.edit().putInt("dimpct", Math.max(10, Math.min(100, val))).apply();
             }
         });
 

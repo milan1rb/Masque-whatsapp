@@ -355,7 +355,7 @@ public class MaskService extends AccessibilityService {
             learnClass(now, false, sc);
             if (!sc.bigOther && !sc.popups.isEmpty() && now - lastHomeTime < 60000) {
                 // Menu ouvert par-dessus l'écran principal : on garde les caches
-                showMasks(withoutPopups(lastWant, sc.popups), 0);
+                showMasks(lastWant, 0);
             } else {
                 showMasks(new HashMap<>(), 0);
             }
@@ -387,13 +387,10 @@ public class MaskService extends AccessibilityService {
         boolean dim = !attached && (!sc.popups.isEmpty() || !sc.homeActive);
         if (dim != dimMasks) {
             dimMasks = dim;
-            popupShotDone = false;
-            if (!dim) popupColors.clear();
             if (canvas != null) canvas.invalidate();
         }
-        if (dim && !popupShotDone && !shotBusy2) measurePopupColors(masks);
         // attaché à la fenêtre : les menus passent naturellement au-dessus, rien à retirer
-        Map<String, Rect> want = attached ? masks : withoutPopups(masks, sc.popups);
+        Map<String, Rect> want = masks;   // jamais retirés : ils restent identiques
         noteMotion(now, want);
         drawOnDisplay = !attached;
         Rect ime = imeBounds();
@@ -1103,50 +1100,6 @@ public class MaskService extends AccessibilityService {
         tuner = null;
     }
 
-    // Quand WhatsApp est recouvert (fiche contact, menu…), Android assombrit son contenu
-    // mais pas notre calque. On relève donc la vraie couleur du fond à côté de chaque cache.
-    private void measurePopupColors(Map<String, Rect> masks) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || masks.isEmpty()) return;
-        popupShotDone = true;
-        shotBusy2 = true;
-        final Map<String, Rect> snap = new HashMap<>(masks);
-        try {
-            takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
-                @Override public void onSuccess(ScreenshotResult result) {
-                    shotBusy2 = false;
-                    try {
-                        Bitmap hw = Bitmap.wrapHardwareBuffer(result.getHardwareBuffer(), result.getColorSpace());
-                        Bitmap bmp = hw == null ? null : hw.copy(Bitmap.Config.ARGB_8888, false);
-                        if (hw != null) hw.recycle();
-                        if (bmp != null) {
-                            for (Map.Entry<String, Rect> e : snap.entrySet()) {
-                                Rect r = e.getValue();
-                                int off = dp(10), best = Integer.MAX_VALUE, col = 0;
-                                int[][] pts = {{r.left - off, r.centerY()}, {r.right + off, r.centerY()},
-                                        {r.centerX(), r.top - off}, {r.centerX(), r.bottom + off}};
-                                for (int[] pt : pts) {
-                                    int c = avg(bmp, pt[0], pt[1]);
-                                    if (c == 0) continue;
-                                    int sum = Color.red(c) + Color.green(c) + Color.blue(c);
-                                    if (sum < best) { best = sum; col = c; }
-                                }
-                                if (col != 0) popupColors.put(e.getKey(), col);
-                            }
-                            bmp.recycle();
-                            if (canvas != null) canvas.invalidate();
-                        }
-                        result.getHardwareBuffer().close();
-                    } catch (Exception ex) {
-                        log("Mesure couleur superposition : " + ex);
-                    }
-                }
-                @Override public void onFailure(int errorCode) { shotBusy2 = false; }
-            });
-        } catch (Exception e) {
-            shotBusy2 = false;
-        }
-    }
-
     // ---------- Ajustement manuel des caches ----------
 
     private void showAdjuster() {
@@ -1397,9 +1350,6 @@ public class MaskService extends AccessibilityService {
     }
 
     private boolean dimMasks = false;
-    private final Map<String, Integer> popupColors = new HashMap<>();
-    private boolean popupShotDone = false;
-    private boolean shotBusy2 = false;
     private boolean drawOnDisplay = true;
 
     class MaskCanvas extends View {
@@ -1422,8 +1372,11 @@ public class MaskService extends AccessibilityService {
             for (Map.Entry<String, Rect> e : shown.entrySet()) {
                 Rect g = maskRect(e.getKey(), e.getValue());
                 int col = maskColor(e.getKey());
-                Integer measured = popupColors.get(e.getKey());
-                if (dimMasks && measured != null) col = measured;   // couleur relevée à l'écran
+                if (dimMasks) {   // Android assombrit WhatsApp mais pas notre calque
+                    int pct = prefs.getInt("dimpct", 45);
+                    col = Color.rgb(Color.red(col) * pct / 100, Color.green(col) * pct / 100,
+                            Color.blue(col) * pct / 100);
+                }
                 paint.setColor(col);
                 if (e.getKey().equals("metaai")) {
                     float rad = g.width() > g.height() * 1.4f ? g.height() / 2f : dp(18);
@@ -1442,14 +1395,6 @@ public class MaskService extends AccessibilityService {
         Rect g = tab ? new Rect(r.left - m, r.top + dp(1), r.right + m, r.bottom + m)
                      : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
 
-        // Pendant une transition, WhatsApp décale toute sa mise en page de quelques dizaines
-        // de pixels : on couvre large le temps qu'elle passe (le fond des barres est uni).
-        if (SystemClock.uptimeMillis() < expandUntil && prefs.getBoolean("tmargin", true)
-                && !key.equals("metaai")) {
-            int e = prefs.getInt("tmarginpx", 45);
-            if (tab) g.set(g.left - e / 3, g.top, g.right + e / 3, g.bottom + e);
-            else g.set(g.left - e / 3, g.top - e, g.right + e / 3, g.bottom + e);
-        }
         return g;
     }
 
