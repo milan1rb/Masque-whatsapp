@@ -239,7 +239,9 @@ public class MaskService extends AccessibilityService {
         int type = e.getEventType();
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
                 || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED
-                || type == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+                || type == AccessibilityEvent.TYPE_VIEW_CLICKED
+                || type == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED) {
+            fastUntil = t + 900;
             scheduleNow();
         } else {
             schedule(30);
@@ -357,6 +359,7 @@ public class MaskService extends AccessibilityService {
             } else {
                 showMasks(new HashMap<>(), 0);
             }
+            if (now < fastUntil) schedule(16);
             if (phase != 0) runMacro(false, new ArrayList<>(), new ArrayList<>(), now);
             return;
         }
@@ -444,6 +447,10 @@ public class MaskService extends AccessibilityService {
             if (!prefs.getBoolean(key, true)) continue;
             if (sc.selectionMode && (key.equals("cam") || key.equals("title"))) continue;
             Rect r = fixed.get(key);
+            if (key.equals("metaai") && r != null && r.width() > W * 0.35) {
+                r = null;                      // ancienne position prise sur le bouton allongé
+                fixed.remove(key);
+            }
             if (r == null) {
                 Rect seen = sc.want.get(key);
                 if (seen == null) continue;
@@ -594,7 +601,8 @@ public class MaskService extends AccessibilityService {
         if (prefs.getBoolean("metaai", true) && !sc.callsSelected) {
             for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByViewId(px + "extended_mini_fab")) {
                 Rect r = bounds(n);
-                if (n.isVisibleToUser() && r.width() < W * 0.8) sc.want.put("metaai", r);
+                // uniquement le petit bouton rond, jamais la version allongée
+                if (n.isVisibleToUser() && r.width() < W * 0.35) sc.want.put("metaai", r);
             }
         }
 
@@ -636,7 +644,7 @@ public class MaskService extends AccessibilityService {
                     && (it.id.endsWith("menuitem_camera") || is(it, "Caméra", "Appareil photo"))) {
                 sc.want.put("cam", new Rect(it.r));
             } else if (prefs.getBoolean("metaai", true) && !sc.callsSelected && cy > H * 0.4
-                    && it.r.width() < W * 0.4
+                    && it.r.width() < W * 0.35
                     && (it.id.endsWith("extended_mini_fab") || has(it, "message à l'ia") || has(it, "meta ai"))
                     && !it.node.isEditable()) {
                 if (!sc.want.containsKey("metaai")) sc.want.put("metaai", bounds(clickableNode(it.node)));
@@ -1446,6 +1454,7 @@ public class MaskService extends AccessibilityService {
     }
 
     private long expandUntil = 0;
+    private long fastUntil = 0;
 
     // Un mouvement ou un changement d'écran déclenche la marge de transition
     private void noteMotion(long now, Map<String, Rect> want) {
@@ -1464,6 +1473,8 @@ public class MaskService extends AccessibilityService {
         if (now < expandUntil) {
             if (canvas != null) canvas.invalidate();
             schedule(16);
+        } else if (now < fastUntil) {
+            schedule(16);       // juste après un appui : on suit l'écran image par image
         }
     }
 
