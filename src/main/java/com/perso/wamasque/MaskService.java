@@ -184,11 +184,24 @@ public class MaskService extends AccessibilityService {
             String key = clickKey(e);
             // Une ligne de discussion ouvre TOUJOURS une conversation : on retire les caches
             // à l'instant de l'appui, sans attendre que la nouvelle fenêtre arrive.
-            if (key != null && (key.endsWith("contact_row_container")
+            boolean leaves = key != null && (key.endsWith("contact_row_container")
                     || key.endsWith("conversations_row_header")
                     || key.endsWith("conversations_archive_header")
                     || key.endsWith(":id/fab")
-                    || key.endsWith("search_bar_inner_layout"))) {
+                    || key.endsWith("search_bar_inner_layout"));
+            if (!leaves) {
+                // beaucoup de lignes de discussion sont signalées par leur nom, sans identifiant :
+                // on reconnaît alors une ligne à sa forme, large et située dans la liste
+                AccessibilityNodeInfo src = e.getSource();
+                if (src != null) {
+                    Rect b = bounds(src);
+                    metrics();
+                    if (b.width() > W * 0.6 && b.centerY() > H * 0.22 && b.centerY() < H * 0.88) {
+                        leaves = true;
+                    }
+                }
+            }
+            if (leaves) {
                 suppressUntil = t + 1200;
                 showMasks(new HashMap<>(), 0);
             }
@@ -1410,7 +1423,8 @@ public class MaskService extends AccessibilityService {
                 Rect g = maskRect(e.getKey(), e.getValue());
                 paint.setColor(maskColor(e.getKey()));
                 if (e.getKey().equals("metaai")) {
-                    float rad = g.width() > g.height() * 1.4f ? g.height() / 2f : dp(18);
+                    float rad = g.width() > g.height() * 1.4f
+                            ? g.height() / 2f : Math.min(g.width(), g.height()) * 0.30f;
                     c.drawRoundRect(g.left, g.top, g.right, g.bottom, rad, rad, paint);
                 } else {
                     c.drawRect(g.left, g.top, g.right, g.bottom, paint);

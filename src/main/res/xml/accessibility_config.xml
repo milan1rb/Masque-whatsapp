@@ -6,5 +6,5 @@
     android:canRetrieveWindowContent="true"
     android:canPerformGestures="true"
     android:canTakeScreenshot="true"
-    android:notificationTimeout="80"
+    android:notificationTimeout="0"
     android:description="@string/service_desc" />
