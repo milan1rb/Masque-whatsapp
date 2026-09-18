@@ -245,7 +245,7 @@ public class MaskService extends AccessibilityService {
                     metrics();
                     suppressUntil = 0;
                     expandUntil = t + 450;
-                    showMasks(loadCache(cls), 0);
+                    showAt = Math.max(showAt, t + 90);
                     schedule(16);
                 }
                 // écran inconnu : on ne touche à rien, l'analyse tranchera juste après
@@ -364,6 +364,7 @@ public class MaskService extends AccessibilityService {
 
         if (sc.bigOther) {
             // une discussion (ou un autre écran complet) est passée devant : retrait immédiat
+            wasHome = false;
             showMasks(new HashMap<>(), 0);
             if (now < fastUntil) schedule(16);
             if (phase != 0) runMacro(false, new ArrayList<>(), new ArrayList<>(), now);
@@ -380,6 +381,7 @@ public class MaskService extends AccessibilityService {
                 }
                 showMasks(lastWant, 0);
             } else {
+                wasHome = false;
                 showMasks(new HashMap<>(), 0);
             }
             if (now < fastUntil) schedule(16);
@@ -387,8 +389,17 @@ public class MaskService extends AccessibilityService {
             return;
         }
 
+        if (!wasHome) {            // on vient de revenir sur l'écran principal
+            wasHome = true;
+            showAt = now + 90;     // laisser l'écran arriver avant de reposer les caches
+        }
         lastHomeTime = now;
         suppressUntil = 0;
+        if (now < showAt) {
+            showMasks(new HashMap<>(), 0);
+            schedule(16);
+            return;
+        }
         fastFails = 0;
         learnClass(now, true, sc);
 
@@ -1445,6 +1456,8 @@ public class MaskService extends AccessibilityService {
 
     private long expandUntil = 0;
     private long fastUntil = 0;
+    private long showAt = 0;
+    private boolean wasHome = true;
 
     // Un mouvement ou un changement d'écran déclenche la marge de transition
     private void noteMotion(long now, Map<String, Rect> want) {
@@ -1549,6 +1562,14 @@ public class MaskService extends AccessibilityService {
         if (wm == null) return;
         ensureCanvas();
         if (canvas != null) canvas.set(drawOnDisplay ? want : new HashMap<>());
+        // les fenêtres ci-dessous ne servent qu'à bloquer le toucher : on les met à jour
+        // juste après, pour ne pas retarder l'image
+        final Map<String, Rect> copy = new HashMap<>(want);
+        handler.post(() -> touchWindows(copy));
+    }
+
+    private void touchWindows(Map<String, Rect> want) {
+        if (wm == null) return;
         int m = dp(2);
         for (String key : KEYS) {
             Rect r = want.get(key);
