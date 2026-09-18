@@ -63,46 +63,32 @@ public class MainActivity extends Activity {
         color.setHint(MaskService.DEFAULT_COLOR);
         color.setText(prefs.getString("color", MaskService.DEFAULT_COLOR));
         root.addView(color);
-        Button pipette = new Button(this);
-        pipette.setText("Pipette : choisir la couleur dans WhatsApp");
-        pipette.setOnClickListener(v -> {
-            prefs.edit().putBoolean("calibcolor", true).apply();
-            Intent wa = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
-            if (wa == null) {
-                Toast.makeText(this, "WhatsApp introuvable", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            Toast.makeText(this, "Touche la zone à copier dans WhatsApp", Toast.LENGTH_LONG).show();
-            startActivity(wa);
-        });
-        root.addView(pipette);
-
-        TextView colorTopLabel = new TextView(this);
-        colorTopLabel.setText("Couleur des masques du haut (nom WhatsApp, appareil photo)");
-        colorTopLabel.setPadding(0, dp(12), 0, 0);
-        root.addView(colorTopLabel);
-        EditText colorTop = new EditText(this);
-        colorTop.setSingleLine(true);
-        colorTop.setHint(MaskService.DEFAULT_COLOR_TOP);
-        colorTop.setText(prefs.getString("colortop", MaskService.DEFAULT_COLOR_TOP));
-        root.addView(colorTop);
-        Button saveTop = new Button(this);
-        saveTop.setText("Enregistrer la couleur du haut");
-        saveTop.setOnClickListener(v -> {
-            String c = colorTop.getText().toString().trim();
+        TextView colorDimLabel = new TextView(this);
+        colorDimLabel.setText("Couleur des masques quand une fenêtre s'ouvre par-dessus (fiche contact)");
+        colorDimLabel.setPadding(0, dp(12), 0, 0);
+        root.addView(colorDimLabel);
+        EditText colorDim = new EditText(this);
+        colorDim.setSingleLine(true);
+        colorDim.setHint(MaskService.DEFAULT_COLOR_DIM);
+        colorDim.setText(prefs.getString("colordim", MaskService.DEFAULT_COLOR_DIM));
+        root.addView(colorDim);
+        Button saveDim = new Button(this);
+        saveDim.setText("Enregistrer la couleur fiche contact");
+        saveDim.setOnClickListener(v -> {
+            String c = colorDim.getText().toString().trim();
             if (!c.startsWith("#")) c = "#" + c;
             try {
                 android.graphics.Color.parseColor(c);
-                prefs.edit().putString("colortop", c).apply();
-                Toast.makeText(this, "Couleur du haut enregistrée", Toast.LENGTH_SHORT).show();
+                prefs.edit().putString("colordim", c).apply();
+                Toast.makeText(this, "Enregistré", Toast.LENGTH_SHORT).show();
             } catch (Exception e) {
                 Toast.makeText(this, "Code couleur invalide", Toast.LENGTH_SHORT).show();
             }
         });
-        root.addView(saveTop);
+        root.addView(saveDim);
 
         Button tune = new Button(this);
-        tune.setText("Régler les couleurs à la main dans WhatsApp (haut et bas)");
+        tune.setText("Régler les couleurs à la main dans WhatsApp");
         tune.setOnClickListener(v -> {
             prefs.edit().putBoolean("tune", true).apply();
             Intent wa = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
@@ -225,24 +211,6 @@ public class MainActivity extends Activity {
                 int val = 8;
                 try { val = Integer.parseInt(e.toString().trim()); } catch (Exception ignored) { }
                 prefs.edit().putInt("margin", Math.max(0, Math.min(60, val))).apply();
-            }
-        });
-
-        TextView dimLabel = new TextView(this);
-        dimLabel.setText("Assombrissement des caches quand une fenêtre s'ouvre par-dessus (%)");
-        root.addView(dimLabel);
-        EditText dim = new EditText(this);
-        dim.setSingleLine(true);
-        dim.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        dim.setText(String.valueOf(prefs.getInt("dimpct", 45)));
-        root.addView(dim);
-        dim.addTextChangedListener(new android.text.TextWatcher() {
-            public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
-            public void onTextChanged(CharSequence c, int a, int b, int d) { }
-            public void afterTextChanged(android.text.Editable e) {
-                int val = 45;
-                try { val = Integer.parseInt(e.toString().trim()); } catch (Exception ignored) { }
-                prefs.edit().putInt("dimpct", Math.max(10, Math.min(100, val))).apply();
             }
         });
 

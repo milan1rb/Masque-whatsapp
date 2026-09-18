@@ -43,6 +43,8 @@ public class MaskService extends AccessibilityService {
     static final String PREFS = "config";
     static final String DEFAULT_COLOR = "#080E15";
     static final String DEFAULT_COLOR_TOP = "#0A1013";
+    static final String DEFAULT_COLOR_DIM = "#060A0D";
+    static final String KEY_DIM = "colordim";
     static volatile boolean running = false;
     static volatile boolean forceMacro = false;
     private static volatile String lastDump = "(aucune capture de l'écran principal de WhatsApp)";
@@ -99,7 +101,7 @@ public class MaskService extends AccessibilityService {
     private View tuner = null;
     private View adjuster = null;
     private int adjustIndex = 0;
-    private boolean tuneTop = false;
+    private int tuneZone = 1;
     private boolean shotBusy = false;
     private long lastShot = 0;
 
@@ -190,11 +192,6 @@ public class MaskService extends AccessibilityService {
                         metrics();
                         suppressUntil = 0;
                         showMasks(loadCache(cls), 0);
-                    } else if (score <= -2) {
-                        // ce bouton mène ailleurs : on retire tout de suite et on empêche
-                        // le réaffichage pendant l'animation de WhatsApp
-                        suppressUntil = t + 900;
-                        showMasks(new HashMap<>(), 0);
                     }
                 }
             }
@@ -226,10 +223,6 @@ public class MaskService extends AccessibilityService {
                     expandUntil = t + 450;
                     showMasks(loadCache(cls), 0);
                     schedule(16);
-                } else if (score <= -2) {
-                    // écran connu comme n'étant pas l'écran principal : retrait immédiat
-                    suppressUntil = t + 400;
-                    showMasks(new HashMap<>(), 0);
                 }
                 // écran inconnu : on ne touche à rien, l'analyse tranchera juste après
             } else if (pk != null && pk.toString().equals(launcherPkg)) {
@@ -341,12 +334,6 @@ public class MaskService extends AccessibilityService {
             schedule(120);
             return;
         }
-        if (prefs.getBoolean("calibcolor", false)) {
-            showMasks(new HashMap<>(), 0);
-            showPicker();
-            return;
-        }
-        hidePicker();
         if (prefs.getBoolean("tune", false)) showTuner(); else hideTuner();
         if (prefs.getBoolean("adjust", false)) showAdjuster(); else hideAdjuster();
         Scan sc = scan(now);
@@ -971,11 +958,12 @@ public class MaskService extends AccessibilityService {
     private int maskColor(String key) {
         if (prefs.getBoolean("debug", false)) return COLOR_TEST;
         boolean top = isTopKey(key);
+        String pref = dimMasks ? KEY_DIM : (top ? KEY_TOP : "color");
+        String def = dimMasks ? DEFAULT_COLOR_DIM : (top ? DEFAULT_COLOR_TOP : DEFAULT_COLOR);
         try {
-            return Color.parseColor(prefs.getString(top ? KEY_TOP : "color",
-                    top ? DEFAULT_COLOR_TOP : DEFAULT_COLOR).trim());
+            return Color.parseColor(prefs.getString(pref, def).trim());
         } catch (Exception e) {
-            return Color.parseColor(DEFAULT_COLOR);
+            return Color.parseColor(def);
         }
     }
 
@@ -1016,17 +1004,22 @@ public class MaskService extends AccessibilityService {
         zone.setOrientation(android.widget.LinearLayout.HORIZONTAL);
         android.widget.Button top = new android.widget.Button(this);
         android.widget.Button bottom = new android.widget.Button(this);
+        android.widget.Button over = new android.widget.Button(this);
         top.setText("Haut");
         bottom.setText("Bas");
+        over.setText("Fiche");
         Runnable refresh = () -> {
-            top.setTextColor(tuneTop ? 0xFF4CAF50 : 0xFFFFFFFF);
-            bottom.setTextColor(tuneTop ? 0xFFFFFFFF : 0xFF4CAF50);
-            label.setText((tuneTop ? "Haut : " : "Bas : ") + tuneHex());
+            top.setTextColor(tuneZone == 0 ? 0xFF4CAF50 : 0xFFFFFFFF);
+            bottom.setTextColor(tuneZone == 1 ? 0xFF4CAF50 : 0xFFFFFFFF);
+            over.setTextColor(tuneZone == 2 ? 0xFF4CAF50 : 0xFFFFFFFF);
+            label.setText(tuneLabel() + " : " + tuneHex());
         };
-        top.setOnClickListener(v -> { tuneTop = true; refresh.run(); });
-        bottom.setOnClickListener(v -> { tuneTop = false; refresh.run(); });
+        top.setOnClickListener(v -> { tuneZone = 0; refresh.run(); });
+        bottom.setOnClickListener(v -> { tuneZone = 1; refresh.run(); });
+        over.setOnClickListener(v -> { tuneZone = 2; refresh.run(); });
         zone.addView(top);
         zone.addView(bottom);
+        zone.addView(over);
         box.addView(zone);
         refresh.run();
 
@@ -1072,9 +1065,20 @@ public class MaskService extends AccessibilityService {
         }
     }
 
+    private String tunePref() {
+        return tuneZone == 0 ? KEY_TOP : (tuneZone == 1 ? "color" : KEY_DIM);
+    }
+
+    private String tuneDefault() {
+        return tuneZone == 0 ? DEFAULT_COLOR_TOP : (tuneZone == 1 ? DEFAULT_COLOR : DEFAULT_COLOR_DIM);
+    }
+
+    private String tuneLabel() {
+        return tuneZone == 0 ? "Haut" : (tuneZone == 1 ? "Bas" : "Fiche contact");
+    }
+
     private String tuneHex() {
-        return tuneTop ? prefs.getString(KEY_TOP, DEFAULT_COLOR_TOP)
-                       : prefs.getString("color", DEFAULT_COLOR);
+        return prefs.getString(tunePref(), tuneDefault());
     }
 
     private android.widget.Button tuneButton(String text, int[] st, int sign, android.widget.TextView label) {
@@ -1082,13 +1086,13 @@ public class MaskService extends AccessibilityService {
         b.setText(text);
         b.setOnClickListener(v -> {
             int c;
-            try { c = Color.parseColor(tuneHex().trim()); } catch (Exception e) { c = Color.parseColor(DEFAULT_COLOR); }
+            try { c = Color.parseColor(tuneHex().trim()); } catch (Exception e) { c = Color.parseColor(tuneDefault()); }
             int nc = Color.rgb(clamp(Color.red(c) + st[0] * sign),
                     clamp(Color.green(c) + st[1] * sign), clamp(Color.blue(c) + st[2] * sign));
             String hex = String.format("#%06X", nc & 0xFFFFFF);
-            prefs.edit().putString(tuneTop ? KEY_TOP : "color", hex).apply();
+            prefs.edit().putString(tunePref(), hex).apply();
             painted.clear();
-            label.setText((tuneTop ? "Haut : " : "Bas : ") + hex);
+            label.setText(tuneLabel() + " : " + hex);
             if (canvas != null) canvas.invalidate();
         });
         return b;
@@ -1371,13 +1375,7 @@ public class MaskService extends AccessibilityService {
         protected void onDraw(Canvas c) {
             for (Map.Entry<String, Rect> e : shown.entrySet()) {
                 Rect g = maskRect(e.getKey(), e.getValue());
-                int col = maskColor(e.getKey());
-                if (dimMasks) {   // Android assombrit WhatsApp mais pas notre calque
-                    int pct = prefs.getInt("dimpct", 45);
-                    col = Color.rgb(Color.red(col) * pct / 100, Color.green(col) * pct / 100,
-                            Color.blue(col) * pct / 100);
-                }
-                paint.setColor(col);
+                paint.setColor(maskColor(e.getKey()));
                 if (e.getKey().equals("metaai")) {
                     float rad = g.width() > g.height() * 1.4f ? g.height() / 2f : dp(18);
                     c.drawRoundRect(g.left, g.top, g.right, g.bottom, rad, rad, paint);
