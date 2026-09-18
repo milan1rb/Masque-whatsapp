@@ -80,6 +80,7 @@ public class MaskService extends AccessibilityService {
     private long lastHomeTime = 0;
     private Map<String, Rect> lastWant = new HashMap<>();
     private final Map<String, Long> lastSeen = new HashMap<>();
+    private long motionUntil = 0;
     private String savedCacheStr = null;
     private String pendingClass = null;
     private long pendingClassTime = 0;
@@ -234,7 +235,7 @@ public class MaskService extends AccessibilityService {
                 || type == AccessibilityEvent.TYPE_VIEW_CLICKED) {
             scheduleNow();
         } else {
-            schedule(30);
+            schedule(16);
         }
     }
 
@@ -375,7 +376,9 @@ public class MaskService extends AccessibilityService {
             lastWant = new HashMap<>(want);
             saveCache(want);
         }
+        if (moved(want)) motionUntil = now + 400;   // WhatsApp anime sa mise en page
         showMasks(want, 0);
+        if (now < motionUntil) schedule(16);          // on colle au mouvement, image par image
 
         List<Chip> chips = findChips(sc.chipItems);
         if (chips.isEmpty() && phase != 0 && now - lastChipScan > 1000) {
@@ -395,6 +398,16 @@ public class MaskService extends AccessibilityService {
         }
     }
 
+    // WhatsApp déplace ses éléments pendant ses animations : on repère ce mouvement
+    private boolean moved(Map<String, Rect> want) {
+        for (Map.Entry<String, Rect> e : want.entrySet()) {
+            Rect old = lastWant.get(e.getKey());
+            if (old == null) return true;
+            if (Math.abs(old.top - e.getValue().top) > 2 || Math.abs(old.left - e.getValue().left) > 2) return true;
+        }
+        return want.size() != lastWant.size();
+    }
+
     // Garde les caches en place quand WhatsApp fait disparaître un élément une fraction
     // de seconde (animations), et ignore les micro-déplacements pour ne pas redessiner.
     private Map<String, Rect> stabilize(Map<String, Rect> found, long now) {
@@ -404,7 +417,8 @@ public class MaskService extends AccessibilityService {
             Rect old = lastWant.get(key);
             if (r != null) {
                 lastSeen.put(key, now);
-                if (old != null && Math.abs(old.left - r.left) <= 4 && Math.abs(old.top - r.top) <= 4
+                boolean animating = now < motionUntil;
+                if (!animating && old != null && Math.abs(old.left - r.left) <= 4 && Math.abs(old.top - r.top) <= 4
                         && Math.abs(old.width() - r.width()) <= 4 && Math.abs(old.height() - r.height()) <= 4) {
                     out.put(key, old);      // pratiquement la même place : on ne bouge rien
                 } else {
