@@ -225,7 +225,7 @@ public class MaskService extends AccessibilityService {
                     if (score <= -1) suppressUntil = t + 400;
                     showMasks(new HashMap<>(), 0);
                 }
-            } else if (pk != null && pk.toString().equals(launcherPkg)) {
+            } else if (pk != null && !isWa(pk) && !pk.toString().equals("com.android.systemui")) {
                 showMasks(new HashMap<>(), 0);
             }
         }
@@ -364,7 +364,13 @@ public class MaskService extends AccessibilityService {
             lastDump = dump(all, sc.homePkg);
         }
 
-        Map<String, Rect> want = stabilize(sc.want, now);
+        List<String> dropNow = new ArrayList<>();
+        if (sc.selectionMode) {          // appui long : la barre du haut change vraiment
+            dropNow.add("cam");
+            dropNow.add("title");
+        }
+        if (sc.callsSelected) dropNow.add("metaai");
+        Map<String, Rect> want = stabilize(sc.want, now, dropNow);
         want = withoutPopups(want, sc.popups);
         Rect ime = imeBounds();
         if (ime != null) {
@@ -410,7 +416,7 @@ public class MaskService extends AccessibilityService {
 
     // Garde les caches en place quand WhatsApp fait disparaître un élément une fraction
     // de seconde (animations), et ignore les micro-déplacements pour ne pas redessiner.
-    private Map<String, Rect> stabilize(Map<String, Rect> found, long now) {
+    private Map<String, Rect> stabilize(Map<String, Rect> found, long now, List<String> dropNow) {
         Map<String, Rect> out = new HashMap<>();
         for (String key : KEYS) {
             Rect r = found.get(key);
@@ -426,7 +432,9 @@ public class MaskService extends AccessibilityService {
                 }
             } else if (old != null) {
                 Long seen = lastSeen.get(key);
-                if (seen != null && now - seen < 400) out.put(key, old);   // sursis
+                long grace = now < motionUntil ? 400 : 80;   // court à l'arrêt, long en animation
+                if (dropNow.contains(key)) grace = 0;        // l'élément a vraiment été remplacé
+                if (seen != null && now - seen < grace) out.put(key, old);
             }
         }
         return out;
