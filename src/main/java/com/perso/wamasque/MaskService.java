@@ -223,7 +223,9 @@ public class MaskService extends AccessibilityService {
                 if (score >= 1 && imeBounds() == null) {
                     metrics();
                     suppressUntil = 0;
+                    expandUntil = t + 450;
                     showMasks(loadCache(cls), 0);
+                    schedule(16);
                 } else if (score <= -2) {
                     // écran connu comme n'étant pas l'écran principal : retrait immédiat
                     suppressUntil = t + 400;
@@ -389,6 +391,7 @@ public class MaskService extends AccessibilityService {
         if (dim && !popupShotDone && !shotBusy2) measurePopupColors(masks);
         // attaché à la fenêtre : les menus passent naturellement au-dessus, rien à retirer
         Map<String, Rect> want = attached ? masks : withoutPopups(masks, sc.popups);
+        noteMotion(now, want);
         drawOnDisplay = !attached;
         Rect ime = imeBounds();
         if (ime != null) {
@@ -1427,9 +1430,41 @@ public class MaskService extends AccessibilityService {
     private Rect maskRect(String key, Rect r) {
         boolean tab = key.equals("actus") || key.equals("commu")
                 || key.equals("disctxt") || key.equals("appelstxt");
-        int m = dp(2);
-        return tab ? new Rect(r.left, r.top + dp(1), r.right, r.bottom)
-                   : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
+        int m = prefs.getInt("margin", 8);            // marge permanente, réglable
+        Rect g = tab ? new Rect(r.left - m, r.top + dp(1), r.right + m, r.bottom + m)
+                     : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
+
+        // Pendant une transition, WhatsApp décale toute sa mise en page de quelques dizaines
+        // de pixels : on couvre large le temps qu'elle passe (le fond des barres est uni).
+        if (SystemClock.uptimeMillis() < expandUntil && prefs.getBoolean("tmargin", true)
+                && !key.equals("metaai")) {
+            int e = prefs.getInt("tmarginpx", 45);
+            if (tab) g.set(g.left - e / 3, g.top, g.right + e / 3, g.bottom + e);
+            else g.set(g.left - e / 3, g.top - e, g.right + e / 3, g.bottom + e);
+        }
+        return g;
+    }
+
+    private long expandUntil = 0;
+
+    // Un mouvement ou un changement d'écran déclenche la marge de transition
+    private void noteMotion(long now, Map<String, Rect> want) {
+        boolean moved = want.size() != lastWant.size();
+        if (!moved) {
+            for (Map.Entry<String, Rect> e : want.entrySet()) {
+                Rect old = lastWant.get(e.getKey());
+                if (old == null || Math.abs(old.top - e.getValue().top) > 2
+                        || Math.abs(old.left - e.getValue().left) > 2) {
+                    moved = true;
+                    break;
+                }
+            }
+        }
+        if (moved) expandUntil = now + 400;
+        if (now < expandUntil) {
+            if (canvas != null) canvas.invalidate();
+            schedule(16);
+        }
     }
 
     private SurfaceControlViewHost host = null;
