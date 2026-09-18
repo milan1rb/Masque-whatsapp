@@ -186,8 +186,10 @@ public class MaskService extends AccessibilityService {
             // à l'instant de l'appui, sans attendre que la nouvelle fenêtre arrive.
             if (key != null && (key.endsWith("contact_row_container")
                     || key.endsWith("conversations_row_header")
-                    || key.endsWith("conversations_archive_header"))) {
-                suppressUntil = t + 700;
+                    || key.endsWith("conversations_archive_header")
+                    || key.endsWith(":id/fab")
+                    || key.endsWith("search_bar_inner_layout"))) {
+                suppressUntil = t + 1200;
                 showMasks(new HashMap<>(), 0);
             }
             if (key != null) {
@@ -452,9 +454,13 @@ public class MaskService extends AccessibilityService {
             if (!prefs.getBoolean(key, true)) continue;
             if (sc.selectionMode && (key.equals("cam") || key.equals("title"))) continue;
             Rect r = fixed.get(key);
-            if (key.equals("metaai") && r != null && r.width() > W * 0.35) {
-                r = null;                      // ancienne position prise sur le bouton allongé
-                fixed.remove(key);
+            if (key.equals("metaai")) {
+                Rect seenAi = sc.want.get(key);
+                if (r != null && (r.width() > W * 0.35
+                        || (seenAi != null && !seenAi.equals(r)))) {
+                    r = null;                  // il a bougé : on reprend sa vraie position
+                    fixed.remove(key);
+                }
             }
             if (r == null) {
                 Rect seen = sc.want.get(key);
