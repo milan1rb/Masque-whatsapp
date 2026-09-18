@@ -108,7 +108,12 @@ public class MaskService extends AccessibilityService {
 
     private final Runnable tick = () -> {
         scheduled = false;
-        try { update(); } catch (Exception e) { log("Erreur : " + e); }
+        try {
+            update();
+        } catch (Exception e) {
+            log("Erreur : " + e);
+            schedule(300);      // on se remet en route quoi qu'il arrive
+        }
     };
 
     static class Item {
@@ -311,8 +316,11 @@ public class MaskService extends AccessibilityService {
     private void metrics() {
         DisplayMetrics dm = new DisplayMetrics();
         wm.getDefaultDisplay().getRealMetrics(dm);
-        W = dm.widthPixels;
-        H = dm.heightPixels;
+        if (dm.widthPixels != W || dm.heightPixels != H) {
+            W = dm.widthPixels;
+            H = dm.heightPixels;
+            loadPositions();     // chaque taille d'écran a ses propres positions
+        }
     }
 
     // ---------- Boucle principale ----------
@@ -1529,7 +1537,13 @@ public class MaskService extends AccessibilityService {
     }
 
     private void ensureCanvas() {
-        if (canvas != null || wm == null) return;
+        if (wm == null) return;
+        if (canvas != null && !canvas.isAttachedToWindow()) {
+            try { wm.removeView(canvas); } catch (Exception ignored) { }
+            canvas = null;
+            log("Calque perdu, recréation");
+        }
+        if (canvas != null) return;
         MaskCanvas c = new MaskCanvas(this);
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,

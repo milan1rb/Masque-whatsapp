@@ -5,9 +5,13 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.text.Editable;
+import android.text.InputType;
+import android.text.TextWatcher;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -20,246 +24,107 @@ public class MainActivity extends Activity {
 
     private SharedPreferences prefs;
     private TextView status;
+    private TextView summary;
     private TextView dumpView;
+    private LinearLayout root;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(MaskService.PREFS, MODE_PRIVATE);
 
-        LinearLayout root = new LinearLayout(this);
+        root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         int pad = dp(16);
-        root.setPadding(pad, pad, pad, pad);
+        root.setPadding(pad, pad, pad, dp(40));
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root);
         setContentView(scroll);
 
+        // ---------- État ----------
         status = new TextView(this);
-        status.setTextSize(16);
+        status.setTextSize(17);
+        status.setPadding(0, 0, 0, dp(8));
         root.addView(status);
 
-        Button acc = new Button(this);
-        acc.setText("Ouvrir les réglages d'accessibilité");
-        acc.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
-        root.addView(acc);
+        button("Ouvrir les réglages d'accessibilité",
+                v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
 
-        title(root, "Éléments à masquer");
-        check(root, "title", "Nom « WhatsApp » en haut", true);
-        check(root, "cam", "Bouton appareil photo (en haut)", true);
-        check(root, "metaai", "Bouton Meta AI (rond violet)", true);
-        check(root, "actus", "Onglet Actus", true);
-        check(root, "commu", "Onglet Communautés", true);
-        check(root, "disctxt", "Texte « Discussions » en bas", true);
-        check(root, "appelstxt", "Texte « Appels » en bas", true);
-        check(root, "debug", "Mode test : masques rouges transparents", false);
+        summary = new TextView(this);
+        summary.setPadding(0, dp(8), 0, 0);
+        root.addView(summary);
 
-        TextView colorLabel = new TextView(this);
-        colorLabel.setText("Couleur des masques du bas (code hexadécimal)");
-        colorLabel.setPadding(0, dp(12), 0, 0);
-        root.addView(colorLabel);
-        EditText color = new EditText(this);
-        color.setSingleLine(true);
-        color.setHint(MaskService.DEFAULT_COLOR);
-        color.setText(prefs.getString("color", MaskService.DEFAULT_COLOR));
-        root.addView(color);
-        TextView colorDimLabel = new TextView(this);
-        colorDimLabel.setText("Couleur des masques quand une fenêtre s'ouvre par-dessus (fiche contact)");
-        colorDimLabel.setPadding(0, dp(12), 0, 0);
-        root.addView(colorDimLabel);
-        EditText colorDim = new EditText(this);
-        colorDim.setSingleLine(true);
-        colorDim.setHint(MaskService.DEFAULT_COLOR_DIM);
-        colorDim.setText(prefs.getString("colordim", MaskService.DEFAULT_COLOR_DIM));
-        root.addView(colorDim);
-        Button saveDim = new Button(this);
-        saveDim.setText("Enregistrer la couleur fiche contact");
-        saveDim.setOnClickListener(v -> {
-            String c = colorDim.getText().toString().trim();
-            if (!c.startsWith("#")) c = "#" + c;
-            try {
-                android.graphics.Color.parseColor(c);
-                prefs.edit().putString("colordim", c).apply();
-                Toast.makeText(this, "Enregistré", Toast.LENGTH_SHORT).show();
-            } catch (Exception e) {
-                Toast.makeText(this, "Code couleur invalide", Toast.LENGTH_SHORT).show();
-            }
-        });
-        root.addView(saveDim);
+        // ---------- Éléments masqués ----------
+        title("Éléments masqués");
+        help("Les caches restent en place tant que tu es sur l'écran principal de WhatsApp.");
+        check("title", "Nom « WhatsApp » en haut", true);
+        check("cam", "Bouton appareil photo", true);
+        check("metaai", "Bouton Meta AI", true);
+        check("actus", "Onglet Actus", true);
+        check("commu", "Onglet Communautés", true);
+        check("disctxt", "Texte « Discussions »", true);
+        check("appelstxt", "Texte « Appels »", true);
 
-        Button tune = new Button(this);
-        tune.setText("Régler les couleurs à la main dans WhatsApp");
-        tune.setOnClickListener(v -> {
-            prefs.edit().putBoolean("tune", true).apply();
-            Intent wa = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
-            if (wa == null) {
-                Toast.makeText(this, "WhatsApp introuvable", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            startActivity(wa);
-        });
-        root.addView(tune);
-
-        Button saveColor = new Button(this);
-        saveColor.setText("Enregistrer la couleur");
-        saveColor.setOnClickListener(v -> {
-            String c = color.getText().toString().trim();
-            if (!c.startsWith("#")) c = "#" + c;
-            try {
-                android.graphics.Color.parseColor(c);
-                prefs.edit().putString("color", c).apply();
-                Toast.makeText(this, "Couleur enregistrée", Toast.LENGTH_SHORT).show();
-            } catch (Exception e) {
-                Toast.makeText(this, "Code couleur invalide", Toast.LENGTH_SHORT).show();
-            }
-        });
-        root.addView(saveColor);
-
-        Button adjust = new Button(this);
-        adjust.setText("Ajuster la position des caches dans WhatsApp");
-        adjust.setOnClickListener(v -> {
-            prefs.edit().putBoolean("adjust", true).apply();
-            Intent wa = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
-            if (wa == null) {
-                Toast.makeText(this, "WhatsApp introuvable", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            startActivity(wa);
-        });
-        root.addView(adjust);
-
-        Button resetPos = new Button(this);
-        resetPos.setText("Redétecter les positions");
-        resetPos.setOnClickListener(v -> {
+        // ---------- Position et taille ----------
+        title("Position et taille des caches");
+        help("Les positions sont retenues automatiquement à la première utilisation.");
+        number("margin", 8, 0, 60, "Marge autour de chaque cache, en pixels");
+        button("Ajuster la position dans WhatsApp", v -> openWhatsApp("adjust"));
+        button("Redétecter les positions", v -> {
             prefs.edit().putBoolean("reset_pos", true).apply();
-            Toast.makeText(this, "Les positions seront redétectées", Toast.LENGTH_SHORT).show();
+            toast("Les positions seront redétectées à la prochaine ouverture");
         });
-        root.addView(resetPos);
 
-        title(root, "Macro au lancement de WhatsApp");
-        TextView help = new TextView(this);
-        help.setText("Écris le nom de la liste à mettre en premier (ex : Non lues, POTO'S). "
-                + "Laisse vide pour désactiver la macro.");
-        root.addView(help);
-        EditText list = new EditText(this);
-        list.setHint("Nom de la liste");
-        list.setSingleLine(true);
-        list.setText(prefs.getString("liste", ""));
-        root.addView(list);
-        TextView savedInfo = new TextView(this);
-        root.addView(savedInfo);
-        Runnable refresh = () -> {
-            String cur = prefs.getString("liste", "");
-            savedInfo.setText(cur.isEmpty() ? "⚠️ Aucune liste enregistrée" : "✅ Liste enregistrée : « " + cur + " »");
-        };
-        refresh.run();
-        list.addTextChangedListener(new android.text.TextWatcher() {
-            public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
-            public void onTextChanged(CharSequence c, int a, int b, int d) { }
-            public void afterTextChanged(android.text.Editable e) {
-                prefs.edit().putString("liste", e.toString().trim()).apply();
-                refresh.run();
-            }
-        });
-        Button launch = new Button(this);
-        launch.setText("Tester : ouvrir WhatsApp avec la macro");
-        launch.setOnClickListener(v -> {
-            Intent wa = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
-            if (wa == null) {
-                Toast.makeText(this, "WhatsApp introuvable", Toast.LENGTH_SHORT).show();
-                return;
-            }
+        // ---------- Couleurs ----------
+        title("Couleurs");
+        help("Une couleur par zone, pour se fondre exactement dans le fond de WhatsApp.");
+        hex("colortop", MaskService.DEFAULT_COLOR_TOP, "Zone du haut (nom, appareil photo)");
+        hex("color", MaskService.DEFAULT_COLOR, "Zone du bas (onglets, bouton IA)");
+        hex("colordim", MaskService.DEFAULT_COLOR_DIM, "Quand une fiche s'ouvre par-dessus");
+        button("Régler les couleurs à l'œil dans WhatsApp", v -> openWhatsApp("tune"));
+        check("debug", "Mode test : caches rouges transparents", false);
+
+        // ---------- Macro ----------
+        title("Macro au lancement");
+        help("Au démarrage de WhatsApp : ouvrir une liste et la placer à gauche.");
+        text("liste", "Nom de la liste (vide = macro désactivée)");
+        check("click", "Ouvrir cette liste", true);
+        check("slide", "La placer tout à gauche", true);
+        number("posx", 10, 0, 500, "Position X voulue, en pixels depuis le bord gauche");
+        button("Tester maintenant", v -> {
             MaskService.forceMacro = true;
-            startActivity(wa);
-        });
-        root.addView(launch);
-        check(root, "slide", "Placer cette liste tout à gauche", true);
-        TextView posLabel = new TextView(this);
-        posLabel.setText("Position X voulue de la liste, en pixels depuis le bord gauche");
-        posLabel.setPadding(0, dp(12), 0, 0);
-        root.addView(posLabel);
-        EditText posX = new EditText(this);
-        posX.setSingleLine(true);
-        posX.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        posX.setText(String.valueOf(prefs.getInt("posx", 10)));
-        root.addView(posX);
-        posX.addTextChangedListener(new android.text.TextWatcher() {
-            public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
-            public void onTextChanged(CharSequence c, int a, int b, int d) { }
-            public void afterTextChanged(android.text.Editable e) {
-                int val = 10;
-                try { val = Integer.parseInt(e.toString().trim()); } catch (Exception ignored) { }
-                prefs.edit().putInt("posx", val).apply();
-            }
+            openWhatsApp(null);
         });
 
-        check(root, "click", "Cliquer dessus", true);
-
-        title(root, "Marges des caches");
-        TextView marginLabel = new TextView(this);
-        marginLabel.setText("Marge permanente autour de chaque cache, en pixels");
-        root.addView(marginLabel);
-        EditText margin = new EditText(this);
-        margin.setSingleLine(true);
-        margin.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        margin.setText(String.valueOf(prefs.getInt("margin", 8)));
-        root.addView(margin);
-        margin.addTextChangedListener(new android.text.TextWatcher() {
-            public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
-            public void onTextChanged(CharSequence c, int a, int b, int d) { }
-            public void afterTextChanged(android.text.Editable e) {
-                int val = 8;
-                try { val = Integer.parseInt(e.toString().trim()); } catch (Exception ignored) { }
-                prefs.edit().putInt("margin", Math.max(0, Math.min(60, val))).apply();
-            }
-        });
-
-        title(root, "Apprentissage");
-        check(root, "learn", "Apprentissage activé (précision et rapidité)", true);
-        TextView learn = new TextView(this);
-        root.addView(learn);
-        Runnable refreshLearn = () -> {
-            int screens = 0;
-            for (String k : prefs.getAll().keySet()) if (k.startsWith("cls:")) screens++;
-            int shortcuts = 0;
-            for (String k : prefs.getAll().keySet()) if (k.startsWith("go:")) shortcuts++;
-            learn.setText("Écrans WhatsApp connus : " + screens
-                    + "\nBoutons anticipés : " + shortcuts
-                    + "\nPrécision du glissement : " + prefs.getInt("gain", 1000) + " ‰"
-                    + "\nCouleur actuelle : " + prefs.getString("color", MaskService.DEFAULT_COLOR));
-        };
-        refreshLearn.run();
-        Button reset = new Button(this);
-        reset.setText("Réinitialiser l'apprentissage");
-        reset.setOnClickListener(v -> {
+        // ---------- Apprentissage ----------
+        title("Apprentissage");
+        help("L'app retient les écrans et les enchaînements pour réagir plus vite avec le temps.");
+        check("learn", "Apprentissage activé", true);
+        button("Réinitialiser l'apprentissage", v -> {
             SharedPreferences.Editor ed = prefs.edit();
             for (String k : prefs.getAll().keySet()) {
                 if (k.startsWith("cls:") || k.startsWith("cache:") || k.startsWith("go:")
-                        || k.startsWith("gon:") || k.equals("gain")) ed.remove(k);
+                        || k.startsWith("gon:") || k.equals("gain") || k.equals("loss")) {
+                    ed.remove(k);
+                }
             }
             ed.apply();
-            refreshLearn.run();
-            Toast.makeText(this, "Apprentissage effacé", Toast.LENGTH_SHORT).show();
+            refresh();
+            toast("Apprentissage effacé");
         });
-        root.addView(reset);
 
-        title(root, "Diagnostic");
-        Button show = new Button(this);
-        show.setText("Afficher les éléments détectés");
-        show.setOnClickListener(v -> dumpView.setText(MaskService.diagnostic()));
-        root.addView(show);
-        Button copy = new Button(this);
-        copy.setText("Copier le diagnostic");
-        copy.setOnClickListener(v -> {
+        // ---------- Diagnostic ----------
+        title("Diagnostic");
+        help("À envoyer en cas de problème : le journal indique ce que l'app a vu et fait.");
+        button("Afficher", v -> dumpView.setText(MaskService.diagnostic()));
+        button("Copier", v -> {
             ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             cm.setPrimaryClip(ClipData.newPlainText("diagnostic", MaskService.diagnostic()));
-            Toast.makeText(this, "Copié", Toast.LENGTH_SHORT).show();
+            toast("Copié");
         });
-        root.addView(copy);
-
         dumpView = new TextView(this);
         dumpView.setTextIsSelectable(true);
-        dumpView.setTextSize(11);
+        dumpView.setTextSize(10);
         dumpView.setTypeface(Typeface.MONOSPACE);
         root.addView(dumpView);
     }
@@ -267,29 +132,135 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        status.setText(MaskService.running
-                ? "✅ Service actif"
-                : "❌ Service inactif : active « WA Masque » dans les réglages d'accessibilité");
+        refresh();
     }
 
-    private void title(LinearLayout root, String text) {
+    private void refresh() {
+        boolean on = MaskService.running;
+        status.setText(on ? "✅ Service actif" : "❌ Service inactif");
+        status.setTextColor(on ? 0xFF4CAF50 : 0xFFE53935);
+
+        int screens = 0, shortcuts = 0;
+        for (String k : prefs.getAll().keySet()) {
+            if (k.startsWith("cls:")) screens++;
+            if (k.startsWith("go:")) shortcuts++;
+        }
+        int masks = 0;
+        for (String k : new String[]{"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt"}) {
+            if (prefs.getBoolean(k, true)) masks++;
+        }
+        String list = prefs.getString("liste", "").trim();
+        summary.setText(masks + " caches actifs"
+                + "\nMacro : " + (list.isEmpty() ? "désactivée" : "liste « " + list + " »")
+                + "\nÉcrans connus : " + screens + ", boutons anticipés : " + shortcuts);
+    }
+
+    // ---------- Petits outils d'interface ----------
+
+    private void title(String text) {
         TextView t = new TextView(this);
         t.setText(text);
-        t.setTextSize(18);
+        t.setTextSize(19);
         t.setTypeface(Typeface.DEFAULT_BOLD);
-        t.setPadding(0, dp(20), 0, dp(6));
+        t.setPadding(0, dp(24), 0, dp(2));
         root.addView(t);
     }
 
-    private void check(LinearLayout root, String key, String label, boolean def) {
+    private void help(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(13);
+        t.setPadding(0, 0, 0, dp(6));
+        root.addView(t);
+    }
+
+    private void button(String text, android.view.View.OnClickListener l) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setOnClickListener(l);
+        root.addView(b);
+    }
+
+    private void check(String key, String label, boolean def) {
         CheckBox cb = new CheckBox(this);
         cb.setText(label);
         cb.setChecked(prefs.getBoolean(key, def));
-        cb.setOnCheckedChangeListener((b, checked) -> prefs.edit().putBoolean(key, checked).apply());
+        cb.setOnCheckedChangeListener((b, checked) -> {
+            prefs.edit().putBoolean(key, checked).apply();
+            refresh();
+        });
         root.addView(cb);
+    }
+
+    private EditText field(String label, int inputType) {
+        TextView t = new TextView(this);
+        t.setText(label);
+        t.setTextSize(13);
+        t.setPadding(0, dp(8), 0, 0);
+        root.addView(t);
+        EditText e = new EditText(this);
+        e.setSingleLine(true);
+        e.setInputType(inputType);
+        root.addView(e);
+        return e;
+    }
+
+    private void text(String key, String label) {
+        EditText e = field(label, InputType.TYPE_CLASS_TEXT);
+        e.setText(prefs.getString(key, ""));
+        e.addTextChangedListener(new Watcher(s -> {
+            prefs.edit().putString(key, s.trim()).apply();
+            refresh();
+        }));
+    }
+
+    private void number(String key, int def, int min, int max, String label) {
+        EditText e = field(label, InputType.TYPE_CLASS_NUMBER);
+        e.setText(String.valueOf(prefs.getInt(key, def)));
+        e.addTextChangedListener(new Watcher(s -> {
+            int v = def;
+            try { v = Integer.parseInt(s.trim()); } catch (Exception ignored) { }
+            prefs.edit().putInt(key, Math.max(min, Math.min(max, v))).apply();
+        }));
+    }
+
+    private void hex(String key, String def, String label) {
+        EditText e = field(label, InputType.TYPE_CLASS_TEXT);
+        e.setText(prefs.getString(key, def));
+        e.addTextChangedListener(new Watcher(s -> {
+            String c = s.trim();
+            if (!c.startsWith("#")) c = "#" + c;
+            try {
+                Color.parseColor(c);
+                prefs.edit().putString(key, c).apply();
+            } catch (Exception ignored) { }
+        }));
+    }
+
+    private void openWhatsApp(String flag) {
+        Intent wa = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
+        if (wa == null) {
+            toast("WhatsApp introuvable");
+            return;
+        }
+        if (flag != null) prefs.edit().putBoolean(flag, true).apply();
+        startActivity(wa);
+    }
+
+    private void toast(String s) {
+        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
     }
 
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density);
+    }
+
+    private static class Watcher implements TextWatcher {
+        interface OnText { void run(String s); }
+        private final OnText action;
+        Watcher(OnText action) { this.action = action; }
+        public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
+        public void onTextChanged(CharSequence c, int a, int b, int d) { }
+        public void afterTextChanged(Editable e) { action.run(e.toString()); }
     }
 }
