@@ -95,6 +95,7 @@ public class MaskService extends AccessibilityService {
     private int fastFails = 0;
     private long lastFullCheck = 0;
     private long lastChipScan = 0;
+    private int lastHomeWinId = -1;
     // Apprentissage de la couleur exacte du fond
     private MaskCanvas canvas = null;
     private View picker = null;
@@ -518,6 +519,7 @@ public class MaskService extends AccessibilityService {
                     sc.homeRoot = root;
                     sc.homePkg = wp;
                     sc.homeWindowId = w.getId();
+                    lastHomeWinId = w.getId();
                     sc.homeActive = w.isActive();
                     w.getBoundsInScreen(sc.homeBounds);
                     continue;
@@ -526,8 +528,12 @@ public class MaskService extends AccessibilityService {
             // Autre fenêtre : menu, boîte de dialogue ou autre écran
             List<Item> list = new ArrayList<>();
             collect(root, 0, list, 80);
-            if (list.size() >= 60) sc.bigOther = true;          // un écran entier, pas une fiche
-            for (Item it : list) if (it.node.isEditable()) sc.bigOther = true;   // champ de saisie
+            // la fenêtre de l'écran principal ne doit jamais être prise pour un autre écran,
+            // même si la reconnaissance échoue une fraction de seconde pendant une animation
+            if (w.getId() != lastHomeWinId) {
+                if (list.size() >= 60) sc.bigOther = true;       // un écran entier, pas une fiche
+                for (Item it : list) if (it.node.isEditable()) sc.bigOther = true;   // champ de saisie
+            }
             Rect b = null;
             for (Item it : list) {
                 if (!it.visible || it.r.isEmpty() || it.text.isEmpty()) continue;
