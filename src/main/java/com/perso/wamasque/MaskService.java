@@ -376,15 +376,15 @@ public class MaskService extends AccessibilityService {
             fixed.clear();
             log("Positions des caches réinitialisées");
         }
-        Map<String, Rect> all = fixedMasks(sc);
-        boolean attached = attachOverlay(sc, all);
+        Map<String, Rect> masks = fixedMasks(sc);
+        boolean attached = attachOverlay(sc, masks);
         boolean dim = !attached && !sc.popups.isEmpty();
         if (dim != dimMasks) {
             dimMasks = dim;
             if (canvas != null) canvas.invalidate();
         }
         // attaché à la fenêtre : les menus passent naturellement au-dessus, rien à retirer
-        Map<String, Rect> want = attached ? all : withoutPopups(all, sc.popups);
+        Map<String, Rect> want = attached ? masks : withoutPopups(masks, sc.popups);
         drawOnDisplay = !attached;
         Rect ime = imeBounds();
         if (ime != null) {
