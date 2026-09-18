@@ -81,6 +81,7 @@ public class MaskService extends AccessibilityService {
     private Map<String, Rect> lastWant = new HashMap<>();
     private final Map<String, Long> lastSeen = new HashMap<>();
     private long motionUntil = 0;
+    private long expandUntil = 0;
     private String savedCacheStr = null;
     private String pendingClass = null;
     private long pendingClassTime = 0;
@@ -185,7 +186,10 @@ public class MaskService extends AccessibilityService {
                     if (score >= 1 && imeBounds() == null) {
                         metrics();
                         suppressUntil = 0;
+                        expandUntil = t + 450;
+                        if (canvas != null) canvas.invalidate();
                         showMasks(loadCache(cls), 0);
+                        schedule(16);
                     } else if (score <= -1) {
                         // ce bouton mène ailleurs : on retire tout de suite et on empêche
                         // le réaffichage pendant l'animation de WhatsApp
@@ -219,7 +223,10 @@ public class MaskService extends AccessibilityService {
                 if (score >= 1 && imeBounds() == null) {
                     metrics();
                     suppressUntil = 0;
+                    expandUntil = t + 450;   // l'écran arrive en glissant : marge de sécurité
+                    if (canvas != null) canvas.invalidate();
                     showMasks(loadCache(cls), 0);
+                    schedule(16);
                 } else {
                     // écran inconnu ou sans caches : on retire tout de suite,
                     // quitte à les remettre 30 ms plus tard si c'est l'écran principal
@@ -383,9 +390,15 @@ public class MaskService extends AccessibilityService {
             lastWant = new HashMap<>(want);
             saveCache(want);
         }
-        if (moved(want)) motionUntil = now + 400;   // WhatsApp anime sa mise en page
+        if (moved(want)) {
+            motionUntil = now + 400;   // WhatsApp anime sa mise en page
+            expandUntil = now + 400;
+        }
         showMasks(want, 0);
-        if (now < motionUntil) schedule(16);          // on colle au mouvement, image par image
+        if (now < motionUntil || now < expandUntil) {
+            if (canvas != null) canvas.invalidate();
+            schedule(16);                              // on colle au mouvement, image par image
+        }
 
         List<Chip> chips = findChips(sc.chipItems);
         if (chips.isEmpty() && phase != 0 && now - lastChipScan > 1000) {
@@ -1275,8 +1288,20 @@ public class MaskService extends AccessibilityService {
         boolean tab = key.equals("actus") || key.equals("commu")
                 || key.equals("disctxt") || key.equals("appelstxt");
         int m = dp(2);
-        return tab ? new Rect(r.left, r.top + dp(1), r.right, r.bottom)
-                   : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
+        Rect g = tab ? new Rect(r.left, r.top + dp(1), r.right, r.bottom)
+                     : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
+
+        // Pendant une transition, WhatsApp décale toute sa mise en page de quelques dizaines
+        // de pixels. On élargit les caches des barres (fond uni) pour que rien ne dépasse.
+        if (SystemClock.uptimeMillis() < expandUntil && !key.equals("metaai")) {
+            int x = dp(8), y = dp(22);
+            if (key.equals("title") || key.equals("cam")) {
+                g.set(g.left - x, g.top - y, g.right + x, g.bottom + y);
+            } else if (tab) {
+                g.set(g.left - dp(4), g.top, g.right + dp(4), g.bottom + y);   // le trait du haut reste visible
+            }
+        }
+        return g;
     }
 
     private void ensureCanvas() {
