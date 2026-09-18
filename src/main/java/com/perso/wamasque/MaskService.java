@@ -250,7 +250,11 @@ public class MaskService extends AccessibilityService {
                     metrics();
                     suppressUntil = 0;
                     expandUntil = t + 450;
-                    showAt = Math.max(showAt, t + 90);
+                    if (wasHome) {
+                        showMasks(loadCache(cls), 0);   // on n'a jamais quitté : rien à attendre
+                    } else {
+                        showAt = Math.max(showAt, t + 90);
+                    }
                     schedule(16);
                 }
                 // écran inconnu : on ne touche à rien, l'analyse tranchera juste après
@@ -404,8 +408,7 @@ public class MaskService extends AccessibilityService {
         lastHomeTime = now;
         suppressUntil = 0;
         if (now < showAt) {
-            showMasks(new HashMap<>(), 0);
-            schedule(16);
+            schedule(16);       // on attend simplement, sans rien retirer de ce qui est affiché
             return;
         }
         fastFails = 0;
