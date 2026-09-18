@@ -79,6 +79,7 @@ public class MaskService extends AccessibilityService {
     // Apprentissage
     private long lastHomeTime = 0;
     private Map<String, Rect> lastWant = new HashMap<>();
+    private final Map<String, Long> lastSeen = new HashMap<>();
     private String savedCacheStr = null;
     private String pendingClass = null;
     private long pendingClassTime = 0;
@@ -352,14 +353,15 @@ public class MaskService extends AccessibilityService {
         suppressUntil = 0;
         learnClass(now, true, sc);
 
-        if (now - lastDumpTime > 10000) {
+        if (now - lastDumpTime > 60000) {
             lastDumpTime = now;
             List<Item> all = new ArrayList<>();
             collect(sc.homeRoot, 0, all, 1500);
             lastDump = dump(all, sc.homePkg);
         }
 
-        Map<String, Rect> want = withoutPopups(sc.want, sc.popups);
+        Map<String, Rect> want = stabilize(sc.want, now);
+        want = withoutPopups(want, sc.popups);
         Rect ime = imeBounds();
         if (ime != null) {
             List<Rect> one = new ArrayList<>();
@@ -391,6 +393,29 @@ public class MaskService extends AccessibilityService {
         }
     }
 
+    // Garde les caches en place quand WhatsApp fait disparaître un élément une fraction
+    // de seconde (animations), et ignore les micro-déplacements pour ne pas redessiner.
+    private Map<String, Rect> stabilize(Map<String, Rect> found, long now) {
+        Map<String, Rect> out = new HashMap<>();
+        for (String key : KEYS) {
+            Rect r = found.get(key);
+            Rect old = lastWant.get(key);
+            if (r != null) {
+                lastSeen.put(key, now);
+                if (old != null && Math.abs(old.left - r.left) <= 4 && Math.abs(old.top - r.top) <= 4
+                        && Math.abs(old.width() - r.width()) <= 4 && Math.abs(old.height() - r.height()) <= 4) {
+                    out.put(key, old);      // pratiquement la même place : on ne bouge rien
+                } else {
+                    out.put(key, r);
+                }
+            } else if (old != null) {
+                Long seen = lastSeen.get(key);
+                if (seen != null && now - seen < 400) out.put(key, old);   // sursis
+            }
+        }
+        return out;
+    }
+
     private Rect imeBounds() {
         try {
             for (AccessibilityWindowInfo w : getWindows()) {
@@ -407,9 +432,16 @@ public class MaskService extends AccessibilityService {
     private Map<String, Rect> withoutPopups(Map<String, Rect> in, List<Rect> popups) {
         Map<String, Rect> out = new HashMap<>();
         for (Map.Entry<String, Rect> e : in.entrySet()) {
+            Rect r = e.getValue();
             boolean hit = false;
-            for (Rect pop : popups) if (Rect.intersects(e.getValue(), pop)) hit = true;
-            if (!hit) out.put(e.getKey(), e.getValue());
+            for (Rect pop : popups) {
+                Rect inter = new Rect(r);
+                if (!inter.intersect(pop)) continue;
+                long area = (long) r.width() * r.height();
+                long cover = (long) inter.width() * inter.height();
+                if (area > 0 && cover * 100 / area > 30) hit = true;   // vraiment recouvert
+            }
+            if (!hit) out.put(e.getKey(), r);
         }
         return out;
     }
