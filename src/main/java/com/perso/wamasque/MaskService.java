@@ -186,7 +186,7 @@ public class MaskService extends AccessibilityService {
                         metrics();
                         suppressUntil = 0;
                         showMasks(loadCache(cls), 0);
-                    } else if (score <= -1) {
+                    } else if (score <= -2) {
                         // ce bouton mène ailleurs : on retire tout de suite et on empêche
                         // le réaffichage pendant l'animation de WhatsApp
                         suppressUntil = t + 900;
@@ -220,12 +220,12 @@ public class MaskService extends AccessibilityService {
                     metrics();
                     suppressUntil = 0;
                     showMasks(loadCache(cls), 0);
-                } else {
-                    // écran inconnu ou sans caches : on retire tout de suite,
-                    // quitte à les remettre 30 ms plus tard si c'est l'écran principal
-                    if (score <= -1) suppressUntil = t + 400;
+                } else if (score <= -2) {
+                    // écran connu comme n'étant pas l'écran principal : retrait immédiat
+                    suppressUntil = t + 400;
                     showMasks(new HashMap<>(), 0);
                 }
+                // écran inconnu : on ne touche à rien, l'analyse tranchera juste après
             } else if (pk != null && pk.toString().equals(launcherPkg)) {
                 showMasks(new HashMap<>(), 0);
             }
@@ -372,6 +372,11 @@ public class MaskService extends AccessibilityService {
             for (String k : KEYS) prefs.edit().remove(posKey(k)).apply();
             fixed.clear();
             log("Positions des caches réinitialisées");
+        }
+        boolean dim = !sc.popups.isEmpty();
+        if (dim != dimMasks) {
+            dimMasks = dim;
+            if (canvas != null) canvas.invalidate();
         }
         Map<String, Rect> want = withoutPopups(fixedMasks(sc), sc.popups);
         Rect ime = imeBounds();
@@ -1322,6 +1327,8 @@ public class MaskService extends AccessibilityService {
         return m;
     }
 
+    private boolean dimMasks = false;
+
     class MaskCanvas extends View {
         private Map<String, Rect> shown = new HashMap<>();
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -1341,7 +1348,12 @@ public class MaskService extends AccessibilityService {
         protected void onDraw(Canvas c) {
             for (Map.Entry<String, Rect> e : shown.entrySet()) {
                 Rect g = maskRect(e.getKey(), e.getValue());
-                paint.setColor(maskColor(e.getKey()));
+                int col = maskColor(e.getKey());
+                if (dimMasks) {   // WhatsApp est assombri derrière une boîte de dialogue
+                    col = Color.rgb((int) (Color.red(col) * 0.4), (int) (Color.green(col) * 0.4),
+                            (int) (Color.blue(col) * 0.4));
+                }
+                paint.setColor(col);
                 if (e.getKey().equals("metaai")) {
                     float rad = g.width() > g.height() * 1.4f ? g.height() / 2f : dp(18);
                     c.drawRoundRect(g.left, g.top, g.right, g.bottom, rad, rad, paint);
