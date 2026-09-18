@@ -79,9 +79,7 @@ public class MaskService extends AccessibilityService {
     // Apprentissage
     private long lastHomeTime = 0;
     private Map<String, Rect> lastWant = new HashMap<>();
-    private final Map<String, Long> lastSeen = new HashMap<>();
-    private long motionUntil = 0;
-    private long expandUntil = 0;
+    private final Map<String, Rect> frozen = new HashMap<>();
     private String savedCacheStr = null;
     private String pendingClass = null;
     private long pendingClassTime = 0;
@@ -89,11 +87,9 @@ public class MaskService extends AccessibilityService {
     private String pendingClick = null;
     private long pendingClickTime = 0;
     private int pendingFinger = 0;
-    private int pendingDist = 0;
     private long suppressUntil = 0;
     private boolean fastBroken = false;
     private int fastFails = 0;
-    private long fastBrokenSince = 0;
     private long lastFullCheck = 0;
     private long lastChipScan = 0;
     // Apprentissage de la couleur exacte du fond
@@ -156,6 +152,7 @@ public class MaskService extends AccessibilityService {
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         metrics();
+        frozen.putAll(loadCache(""));
         try {
             ResolveInfo ri = getPackageManager().resolveActivity(
                     new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
@@ -186,10 +183,7 @@ public class MaskService extends AccessibilityService {
                     if (score >= 1 && imeBounds() == null) {
                         metrics();
                         suppressUntil = 0;
-                        expandUntil = t + 450;
-                        if (canvas != null) canvas.invalidate();
                         showMasks(loadCache(cls), 0);
-                        schedule(16);
                     } else if (score <= -1) {
                         // ce bouton mène ailleurs : on retire tout de suite et on empêche
                         // le réaffichage pendant l'animation de WhatsApp
@@ -223,21 +217,15 @@ public class MaskService extends AccessibilityService {
                 if (score >= 1 && imeBounds() == null) {
                     metrics();
                     suppressUntil = 0;
-                    expandUntil = t + 450;   // l'écran arrive en glissant : marge de sécurité
-                    if (canvas != null) canvas.invalidate();
                     showMasks(loadCache(cls), 0);
-                    schedule(16);
                 } else {
                     // écran inconnu ou sans caches : on retire tout de suite,
                     // quitte à les remettre 30 ms plus tard si c'est l'écran principal
                     if (score <= -1) suppressUntil = t + 400;
                     showMasks(new HashMap<>(), 0);
                 }
-            } else if (pk != null && !isWa(pk) && !pk.toString().equals("com.android.systemui")) {
-                // seulement si WhatsApp n'est plus au premier plan : sinon c'est un clavier,
-                // une notification ou une fenêtre système, et les caches doivent rester
-                AccessibilityNodeInfo top = getRootInActiveWindow();
-                if (top == null || !isWa(top.getPackageName())) showMasks(new HashMap<>(), 0);
+            } else if (pk != null && pk.toString().equals(launcherPkg)) {
+                showMasks(new HashMap<>(), 0);
             }
         }
         int type = e.getEventType();
@@ -246,7 +234,7 @@ public class MaskService extends AccessibilityService {
                 || type == AccessibilityEvent.TYPE_VIEW_CLICKED) {
             scheduleNow();
         } else {
-            schedule(16);
+            schedule(30);
         }
     }
 
@@ -368,21 +356,14 @@ public class MaskService extends AccessibilityService {
         fastFails = 0;
         learnClass(now, true, sc);
 
-        if (now - lastDumpTime > 60000) {
+        if (now - lastDumpTime > 10000) {
             lastDumpTime = now;
             List<Item> all = new ArrayList<>();
             collect(sc.homeRoot, 0, all, 1500);
             lastDump = dump(all, sc.homePkg);
         }
 
-        List<String> dropNow = new ArrayList<>();
-        if (sc.selectionMode) {          // appui long : la barre du haut change vraiment
-            dropNow.add("cam");
-            dropNow.add("title");
-        }
-        if (sc.callsSelected) dropNow.add("metaai");
-        Map<String, Rect> want = stabilize(sc.want, now, dropNow);
-        want = withoutPopups(want, sc.popups);
+        Map<String, Rect> want = withoutPopups(freeze(sc), sc.popups);
         Rect ime = imeBounds();
         if (ime != null) {
             List<Rect> one = new ArrayList<>();
@@ -393,15 +374,7 @@ public class MaskService extends AccessibilityService {
             lastWant = new HashMap<>(want);
             saveCache(want);
         }
-        if (moved(want)) {
-            motionUntil = now + 400;   // WhatsApp anime sa mise en page
-            expandUntil = now + 400;
-        }
         showMasks(want, 0);
-        if (now < motionUntil || now < expandUntil) {
-            if (canvas != null) canvas.invalidate();
-            schedule(16);                              // on colle au mouvement, image par image
-        }
 
         List<Chip> chips = findChips(sc.chipItems);
         if (chips.isEmpty() && phase != 0 && now - lastChipScan > 1000) {
@@ -421,42 +394,6 @@ public class MaskService extends AccessibilityService {
         }
     }
 
-    // WhatsApp déplace ses éléments pendant ses animations : on repère ce mouvement
-    private boolean moved(Map<String, Rect> want) {
-        for (Map.Entry<String, Rect> e : want.entrySet()) {
-            Rect old = lastWant.get(e.getKey());
-            if (old == null) return true;
-            if (Math.abs(old.top - e.getValue().top) > 2 || Math.abs(old.left - e.getValue().left) > 2) return true;
-        }
-        return want.size() != lastWant.size();
-    }
-
-    // Garde les caches en place quand WhatsApp fait disparaître un élément une fraction
-    // de seconde (animations), et ignore les micro-déplacements pour ne pas redessiner.
-    private Map<String, Rect> stabilize(Map<String, Rect> found, long now, List<String> dropNow) {
-        Map<String, Rect> out = new HashMap<>();
-        for (String key : KEYS) {
-            Rect r = found.get(key);
-            Rect old = lastWant.get(key);
-            if (r != null) {
-                lastSeen.put(key, now);
-                boolean animating = now < motionUntil;
-                if (!animating && old != null && Math.abs(old.left - r.left) <= 4 && Math.abs(old.top - r.top) <= 4
-                        && Math.abs(old.width() - r.width()) <= 4 && Math.abs(old.height() - r.height()) <= 4) {
-                    out.put(key, old);      // pratiquement la même place : on ne bouge rien
-                } else {
-                    out.put(key, r);
-                }
-            } else if (old != null) {
-                Long seen = lastSeen.get(key);
-                long grace = now < motionUntil ? 500 : 300;   // assez long pour absorber les clignotements
-                if (dropNow.contains(key)) grace = 0;        // l'élément a vraiment été remplacé
-                if (seen != null && now - seen < grace) out.put(key, old);
-            }
-        }
-        return out;
-    }
-
     private Rect imeBounds() {
         try {
             for (AccessibilityWindowInfo w : getWindows()) {
@@ -470,19 +407,41 @@ public class MaskService extends AccessibilityService {
         return null;
     }
 
+    // Les barres du haut et du bas sont toujours au même endroit sur l'écran principal.
+    // Une fois leur position connue, le cache y reste posé en permanence : l'élément
+    // apparaît DERRIÈRE un cache déjà présent, il n'y a donc plus rien à synchroniser.
+    private static final String[] FIXED = {"title", "cam", "actus", "commu", "disctxt", "appelstxt"};
+
+    private Map<String, Rect> freeze(Scan sc) {
+        Map<String, Rect> out = new HashMap<>(sc.want);
+        for (String key : FIXED) {
+            if (!prefs.getBoolean(key, true)) continue;
+            Rect seen = sc.want.get(key);
+            if (seen != null) {
+                Rect kept = frozen.get(key);
+                if (kept == null || Math.abs(kept.left - seen.left) > dp(8)
+                        || Math.abs(kept.top - seen.top) > dp(8)
+                        || Math.abs(kept.width() - seen.width()) > dp(8)
+                        || Math.abs(kept.height() - seen.height()) > dp(8)) {
+                    frozen.put(key, new Rect(seen));
+                }
+                out.put(key, frozen.get(key));
+                continue;
+            }
+            // élément non signalé par WhatsApp : le cache reste, sauf vraie raison de l'enlever
+            if (sc.selectionMode && (key.equals("cam") || key.equals("title"))) continue;
+            Rect kept = frozen.get(key);
+            if (kept != null) out.put(key, kept);
+        }
+        return out;
+    }
+
     private Map<String, Rect> withoutPopups(Map<String, Rect> in, List<Rect> popups) {
         Map<String, Rect> out = new HashMap<>();
         for (Map.Entry<String, Rect> e : in.entrySet()) {
-            Rect r = e.getValue();
             boolean hit = false;
-            for (Rect pop : popups) {
-                Rect inter = new Rect(r);
-                if (!inter.intersect(pop)) continue;
-                long area = (long) r.width() * r.height();
-                long cover = (long) inter.width() * inter.height();
-                if (area > 0 && cover * 100 / area > 30) hit = true;   // vraiment recouvert
-            }
-            if (!hit) out.put(e.getKey(), r);
+            for (Rect pop : popups) if (Rect.intersects(e.getValue(), pop)) hit = true;
+            if (!hit) out.put(e.getKey(), e.getValue());
         }
         return out;
     }
@@ -490,11 +449,6 @@ public class MaskService extends AccessibilityService {
     // ---------- Analyse de l'écran ----------
 
     private Scan scan(long now) {
-        // on retente le mode rapide de temps en temps : une transition peut l'avoir mis en défaut
-        if (fastBroken && now - fastBrokenSince > 60000) {
-            fastBroken = false;
-            fastFails = 0;
-        }
         Scan sc = new Scan();
         List<AccessibilityWindowInfo> windows = getWindows();
         for (AccessibilityWindowInfo w : windows) {
@@ -539,7 +493,6 @@ public class MaskService extends AccessibilityService {
                 if (isHome(list)) {
                     if (++fastFails >= 3) {
                         fastBroken = true;
-                        fastBrokenSince = now;
                         log("Identifiants WhatsApp inconnus : passage en analyse complète");
                         schedule(30);
                     }
@@ -637,7 +590,7 @@ public class MaskService extends AccessibilityService {
                     && (it.id.endsWith("menuitem_camera") || is(it, "Caméra", "Appareil photo"))) {
                 sc.want.put("cam", new Rect(it.r));
             } else if (prefs.getBoolean("metaai", true) && !sc.callsSelected && cy > H * 0.4
-                    && it.r.width() < W * 0.8
+                    && it.r.width() < W * 0.4
                     && (it.id.endsWith("extended_mini_fab") || has(it, "message à l'ia") || has(it, "meta ai"))
                     && !it.node.isEditable()) {
                 if (!sc.want.containsKey("metaai")) sc.want.put("metaai", bounds(clickableNode(it.node)));
@@ -749,20 +702,11 @@ public class MaskService extends AccessibilityService {
         // Apprentissage : combien la barre a réellement bougé pour le geste demandé
         if (prefs.getBoolean("learn", true) && lastLeft != Integer.MIN_VALUE && pendingFinger > 0) {
             int moved = Math.abs(lastLeft - goal.r.left);
-            double g = prefs.getInt("gain", 1000) / 1000.0;
-            int b = prefs.getInt("loss", 0);
-            if (moved > 30) {
-                if (pendingDist >= 200 && pendingFinger > b) {
-                    // grands déplacements : on ajuste le rapport doigt / barre
-                    double measured = moved / (double) (pendingFinger - b);
-                    int next = (int) Math.round((g * 3 + measured) / 4 * 1000);
-                    prefs.edit().putInt("gain", Math.max(500, Math.min(1600, next))).apply();
-                } else {
-                    // petits déplacements : on ajuste la perte de début de geste
-                    int measured = (int) Math.round(pendingFinger - moved / g);
-                    int next = (int) Math.round((b + measured) / 2.0);
-                    prefs.edit().putInt("loss", Math.max(0, Math.min(150, next))).apply();
-                }
+            if (moved > 40) {
+                int measured = (int) Math.round(moved * 1000.0 / pendingFinger);
+                int gain = prefs.getInt("gain", 1000);
+                int next = Math.max(500, Math.min(1600, (gain * 3 + measured) / 4));
+                prefs.edit().putInt("gain", next).apply();
             }
             pendingFinger = 0;
         }
@@ -895,13 +839,9 @@ public class MaskService extends AccessibilityService {
     // loin des bords de l'écran (geste retour d'Android).
     private void swipe(int y, int dist) {
         int slop = ViewConfiguration.get(this).getScaledTouchSlop();
-        boolean learn = prefs.getBoolean("learn", true);
-        double g = prefs.getInt("gain", 1000) / 1000.0;
-        int b = learn ? prefs.getInt("loss", 0) : 0;
-        int finger = learn ? (int) Math.round(dist / g) : dist;
-        finger += finger >= 0 ? b : -b;
+        int gain = prefs.getInt("gain", 1000);
+        int finger = prefs.getBoolean("learn", true) ? (int) Math.round(dist * 1000.0 / gain) : dist;
         pendingFinger = Math.abs(finger);
-        pendingDist = Math.abs(dist);
         swipeFinger(y, finger, slop);
     }
 
@@ -1291,20 +1231,8 @@ public class MaskService extends AccessibilityService {
         boolean tab = key.equals("actus") || key.equals("commu")
                 || key.equals("disctxt") || key.equals("appelstxt");
         int m = dp(2);
-        Rect g = tab ? new Rect(r.left, r.top + dp(1), r.right, r.bottom)
-                     : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
-
-        // Pendant une transition, WhatsApp décale toute sa mise en page de quelques dizaines
-        // de pixels. On élargit les caches des barres (fond uni) pour que rien ne dépasse.
-        if (SystemClock.uptimeMillis() < expandUntil && !key.equals("metaai")) {
-            int x = dp(8), y = dp(22);
-            if (key.equals("title") || key.equals("cam")) {
-                g.set(g.left - x, g.top - y, g.right + x, g.bottom + y);
-            } else if (tab) {
-                g.set(g.left - dp(4), g.top, g.right + dp(4), g.bottom + y);   // le trait du haut reste visible
-            }
-        }
-        return g;
+        return tab ? new Rect(r.left, r.top + dp(1), r.right, r.bottom)
+                   : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
     }
 
     private void ensureCanvas() {
