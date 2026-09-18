@@ -79,7 +79,7 @@ public class MaskService extends AccessibilityService {
     // Apprentissage
     private long lastHomeTime = 0;
     private Map<String, Rect> lastWant = new HashMap<>();
-    private final Map<String, Rect> frozen = new HashMap<>();
+    private final Map<String, Rect> fixed = new HashMap<>();
     private String savedCacheStr = null;
     private String pendingClass = null;
     private long pendingClassTime = 0;
@@ -96,6 +96,8 @@ public class MaskService extends AccessibilityService {
     private MaskCanvas canvas = null;
     private View picker = null;
     private View tuner = null;
+    private View adjuster = null;
+    private int adjustIndex = 0;
     private boolean tuneTop = false;
     private boolean shotBusy = false;
     private long lastShot = 0;
@@ -152,7 +154,7 @@ public class MaskService extends AccessibilityService {
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         metrics();
-        frozen.putAll(loadCache(""));
+        loadPositions();
         try {
             ResolveInfo ri = getPackageManager().resolveActivity(
                     new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
@@ -301,6 +303,7 @@ public class MaskService extends AccessibilityService {
         if (!isWa(pkg)) {
             hidePicker();
             hideTuner();
+            hideAdjuster();
             showMasks(new HashMap<>(), 0);
             if (!pkg.equals("com.android.systemui")) {
                 inWhatsApp = false;
@@ -337,6 +340,7 @@ public class MaskService extends AccessibilityService {
         }
         hidePicker();
         if (prefs.getBoolean("tune", false)) showTuner(); else hideTuner();
+        if (prefs.getBoolean("adjust", false)) showAdjuster(); else hideAdjuster();
         Scan sc = scan(now);
 
         if (!sc.home) {
@@ -363,7 +367,13 @@ public class MaskService extends AccessibilityService {
             lastDump = dump(all, sc.homePkg);
         }
 
-        Map<String, Rect> want = withoutPopups(freeze(sc), sc.popups);
+        if (prefs.getBoolean("reset_pos", false)) {
+            prefs.edit().putBoolean("reset_pos", false).apply();
+            for (String k : KEYS) prefs.edit().remove(posKey(k)).apply();
+            fixed.clear();
+            log("Positions des caches réinitialisées");
+        }
+        Map<String, Rect> want = withoutPopups(fixedMasks(sc), sc.popups);
         Rect ime = imeBounds();
         if (ime != null) {
             List<Rect> one = new ArrayList<>();
@@ -407,33 +417,47 @@ public class MaskService extends AccessibilityService {
         return null;
     }
 
-    // Les barres du haut et du bas sont toujours au même endroit sur l'écran principal.
-    // Une fois leur position connue, le cache y reste posé en permanence : l'élément
-    // apparaît DERRIÈRE un cache déjà présent, il n'y a donc plus rien à synchroniser.
-    private static final String[] FIXED = {"title", "cam", "actus", "commu", "disctxt", "appelstxt"};
-
-    private Map<String, Rect> freeze(Scan sc) {
-        Map<String, Rect> out = new HashMap<>(sc.want);
-        for (String key : FIXED) {
+    // Tous les caches sont à une position fixe, retenue une fois pour toutes.
+    // La détection ne sert plus qu'à trouver la position la première fois.
+    private Map<String, Rect> fixedMasks(Scan sc) {
+        Map<String, Rect> out = new HashMap<>();
+        for (String key : KEYS) {
             if (!prefs.getBoolean(key, true)) continue;
-            Rect seen = sc.want.get(key);
-            if (seen != null) {
-                Rect kept = frozen.get(key);
-                if (kept == null || Math.abs(kept.left - seen.left) > dp(8)
-                        || Math.abs(kept.top - seen.top) > dp(8)
-                        || Math.abs(kept.width() - seen.width()) > dp(8)
-                        || Math.abs(kept.height() - seen.height()) > dp(8)) {
-                    frozen.put(key, new Rect(seen));
-                }
-                out.put(key, frozen.get(key));
-                continue;
-            }
-            // élément non signalé par WhatsApp : le cache reste, sauf vraie raison de l'enlever
             if (sc.selectionMode && (key.equals("cam") || key.equals("title"))) continue;
-            Rect kept = frozen.get(key);
-            if (kept != null) out.put(key, kept);
+            Rect r = fixed.get(key);
+            if (r == null) {
+                Rect seen = sc.want.get(key);
+                if (seen == null) continue;
+                r = new Rect(seen);
+                fixed.put(key, r);
+                savePos(key, r);
+                log("Position retenue pour " + key + " : " + r.toShortString());
+            }
+            out.put(key, r);
         }
         return out;
+    }
+
+    private String posKey(String key) {
+        return "pos:" + key + ":" + W + "x" + H;
+    }
+
+    private void savePos(String key, Rect r) {
+        prefs.edit().putString(posKey(key),
+                r.left + "," + r.top + "," + r.right + "," + r.bottom).apply();
+    }
+
+    private void loadPositions() {
+        fixed.clear();
+        for (String key : KEYS) {
+            String v = prefs.getString(posKey(key), "");
+            String[] n = v.split(",");
+            if (n.length != 4) continue;
+            try {
+                fixed.put(key, new Rect(Integer.parseInt(n[0]), Integer.parseInt(n[1]),
+                        Integer.parseInt(n[2]), Integer.parseInt(n[3])));
+            } catch (NumberFormatException ignored) { }
+        }
     }
 
     private Map<String, Rect> withoutPopups(Map<String, Rect> in, List<Rect> popups) {
@@ -1047,6 +1071,107 @@ public class MaskService extends AccessibilityService {
         if (tuner == null) return;
         try { wm.removeView(tuner); } catch (Exception ignored) { }
         tuner = null;
+    }
+
+    // ---------- Ajustement manuel des caches ----------
+
+    private void showAdjuster() {
+        if (adjuster != null) return;
+        android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        box.setBackgroundColor(0xEE202020);
+        box.setPadding(dp(8), dp(8), dp(8), dp(8));
+
+        final android.widget.TextView label = new android.widget.TextView(this);
+        label.setTextColor(0xFFFFFFFF);
+        box.addView(label);
+        Runnable refresh = () -> {
+            Rect r = fixed.get(KEYS[adjustIndex]);
+            label.setText("Cache : " + adjustName(KEYS[adjustIndex])
+                    + (r == null ? " (pas encore détecté)" : " " + r.toShortString()));
+        };
+
+        android.widget.Button pick = new android.widget.Button(this);
+        pick.setText("Changer de cache");
+        pick.setOnClickListener(v -> {
+            adjustIndex = (adjustIndex + 1) % KEYS.length;
+            refresh.run();
+        });
+        box.addView(pick);
+
+        box.addView(adjustRow(new String[]{"←", "→", "↑", "↓"},
+                new int[][]{{-4, 0, -4, 0}, {4, 0, 4, 0}, {0, -4, 0, -4}, {0, 4, 0, 4}}, refresh));
+        box.addView(adjustRow(new String[]{"larg -", "larg +", "haut -", "haut +"},
+                new int[][]{{0, 0, -4, 0}, {0, 0, 4, 0}, {0, 0, 0, -4}, {0, 0, 0, 4}}, refresh));
+
+        android.widget.Button done = new android.widget.Button(this);
+        done.setText("Terminé");
+        done.setOnClickListener(v -> {
+            prefs.edit().putBoolean("adjust", false).apply();
+            hideAdjuster();
+        });
+        box.addView(done);
+        refresh.run();
+
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT);
+        lp.gravity = Gravity.TOP | Gravity.START;
+        lp.x = dp(12);
+        lp.y = (int) (H * 0.3);
+        lp.windowAnimations = 0;
+        if (Build.VERSION.SDK_INT >= 30) lp.setFitInsetsTypes(0);
+        try {
+            wm.addView(box, lp);
+            adjuster = box;
+        } catch (Exception e) {
+            log("Ajustement impossible : " + e);
+        }
+    }
+
+    private android.widget.LinearLayout adjustRow(String[] names, int[][] deltas, Runnable refresh) {
+        android.widget.LinearLayout row = new android.widget.LinearLayout(this);
+        row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        for (int i = 0; i < names.length; i++) {
+            final int[] d = deltas[i];
+            android.widget.Button b = new android.widget.Button(this);
+            b.setText(names[i]);
+            b.setOnClickListener(v -> {
+                String key = KEYS[adjustIndex];
+                Rect r = fixed.get(key);
+                if (r == null) return;
+                r.set(r.left + d[0], r.top + d[1], r.right + d[2], r.bottom + d[3]);
+                savePos(key, r);
+                if (canvas != null) canvas.invalidate();
+                showMasks(lastWant, 0);
+                refresh.run();
+            });
+            row.addView(b);
+        }
+        return row;
+    }
+
+    private static String adjustName(String key) {
+        switch (key) {
+            case "title": return "Nom WhatsApp";
+            case "cam": return "Appareil photo";
+            case "metaai": return "Bouton IA";
+            case "actus": return "Onglet Actus";
+            case "commu": return "Onglet Communautés";
+            case "disctxt": return "Texte Discussions";
+            case "appelstxt": return "Texte Appels";
+            default: return key;
+        }
+    }
+
+    private void hideAdjuster() {
+        if (adjuster == null) return;
+        try { wm.removeView(adjuster); } catch (Exception ignored) { }
+        adjuster = null;
     }
 
     // ---------- Pipette ----------

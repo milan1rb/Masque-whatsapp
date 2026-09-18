@@ -129,6 +129,27 @@ public class MainActivity extends Activity {
         });
         root.addView(saveColor);
 
+        Button adjust = new Button(this);
+        adjust.setText("Ajuster la position des caches dans WhatsApp");
+        adjust.setOnClickListener(v -> {
+            prefs.edit().putBoolean("adjust", true).apply();
+            Intent wa = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
+            if (wa == null) {
+                Toast.makeText(this, "WhatsApp introuvable", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            startActivity(wa);
+        });
+        root.addView(adjust);
+
+        Button resetPos = new Button(this);
+        resetPos.setText("Redétecter les positions");
+        resetPos.setOnClickListener(v -> {
+            prefs.edit().putBoolean("reset_pos", true).apply();
+            Toast.makeText(this, "Les positions seront redétectées", Toast.LENGTH_SHORT).show();
+        });
+        root.addView(resetPos);
+
         title(root, "Macro au lancement de WhatsApp");
         TextView help = new TextView(this);
         help.setText("Écris le nom de la liste à mettre en premier (ex : Non lues, POTO'S). "
