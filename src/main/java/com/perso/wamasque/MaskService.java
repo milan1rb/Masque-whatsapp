@@ -338,6 +338,13 @@ public class MaskService extends AccessibilityService {
         if (prefs.getBoolean("adjust", false)) showAdjuster(); else hideAdjuster();
         Scan sc = scan(now);
 
+        if (sc.bigOther) {
+            // une discussion (ou un autre écran complet) est passée devant : retrait immédiat
+            showMasks(new HashMap<>(), 0);
+            if (now < fastUntil) schedule(16);
+            if (phase != 0) runMacro(false, new ArrayList<>(), new ArrayList<>(), now);
+            return;
+        }
         if (!sc.home) {
             learnClass(now, false, sc);
             if (!sc.bigOther && now - lastHomeTime < 1500) {
@@ -509,11 +516,10 @@ public class MaskService extends AccessibilityService {
                 }
             }
             // Autre fenêtre : menu, boîte de dialogue ou autre écran
-            Rect wbounds = new Rect();
-            w.getBoundsInScreen(wbounds);
-            if ((long) wbounds.width() * wbounds.height() > (long) (W * H * 0.8)) sc.bigOther = true;
             List<Item> list = new ArrayList<>();
-            collect(root, 0, list, 90);
+            collect(root, 0, list, 80);
+            if (list.size() >= 60) sc.bigOther = true;          // un écran entier, pas une fiche
+            for (Item it : list) if (it.node.isEditable()) sc.bigOther = true;   // champ de saisie
             Rect b = null;
             for (Item it : list) {
                 if (!it.visible || it.r.isEmpty() || it.text.isEmpty()) continue;
