@@ -21,6 +21,7 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.view.Display;
+import android.view.SurfaceControlViewHost;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -128,6 +129,8 @@ public class MaskService extends AccessibilityService {
         List<Rect> popups = new ArrayList<>();
         List<Item> chipItems = new ArrayList<>();
         AccessibilityNodeInfo homeRoot;
+        int homeWindowId = -1;
+        Rect homeBounds = new Rect();
         String homePkg = "com.whatsapp";
     }
 
@@ -373,12 +376,16 @@ public class MaskService extends AccessibilityService {
             fixed.clear();
             log("Positions des caches réinitialisées");
         }
-        boolean dim = !sc.popups.isEmpty();
+        Map<String, Rect> all = fixedMasks(sc);
+        boolean attached = attachOverlay(sc, all);
+        boolean dim = !attached && !sc.popups.isEmpty();
         if (dim != dimMasks) {
             dimMasks = dim;
             if (canvas != null) canvas.invalidate();
         }
-        Map<String, Rect> want = withoutPopups(fixedMasks(sc), sc.popups);
+        // attaché à la fenêtre : les menus passent naturellement au-dessus, rien à retirer
+        Map<String, Rect> want = attached ? all : withoutPopups(all, sc.popups);
+        drawOnDisplay = !attached;
         Rect ime = imeBounds();
         if (ime != null) {
             List<Rect> one = new ArrayList<>();
@@ -492,6 +499,8 @@ public class MaskService extends AccessibilityService {
                     sc.home = true;
                     sc.homeRoot = root;
                     sc.homePkg = wp;
+                    sc.homeWindowId = w.getId();
+                    w.getBoundsInScreen(sc.homeBounds);
                     continue;
                 }
             }
@@ -1328,6 +1337,7 @@ public class MaskService extends AccessibilityService {
     }
 
     private boolean dimMasks = false;
+    private boolean drawOnDisplay = true;
 
     class MaskCanvas extends View {
         private Map<String, Rect> shown = new HashMap<>();
@@ -1372,6 +1382,53 @@ public class MaskService extends AccessibilityService {
                    : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
     }
 
+    private SurfaceControlViewHost host = null;
+    private MaskCanvas hostCanvas = null;
+    private int hostW = 0, hostH = 0;
+    private int attachedWindowId = -1;
+    private boolean attachOk = true;
+
+    // Android 14+ : on colle notre calque À LA FENÊTRE de WhatsApp. Il est alors composé
+    // avec elle : il suit ses animations, s'assombrit avec elle et disparaît avec elle.
+    private boolean attachOverlay(Scan sc, Map<String, Rect> want) {
+        if (Build.VERSION.SDK_INT < 34 || !attachOk || sc.homeWindowId == -1) return false;
+        Rect wb = sc.homeBounds;
+        if (wb.isEmpty()) return false;
+        try {
+            if (host == null) {
+                Display display = ((android.hardware.display.DisplayManager)
+                        getSystemService(DISPLAY_SERVICE)).getDisplay(Display.DEFAULT_DISPLAY);
+                host = new SurfaceControlViewHost(this, display, (android.os.IBinder) null);
+                hostCanvas = new MaskCanvas(this);
+                host.setView(hostCanvas, wb.width(), wb.height());
+                hostW = wb.width();
+                hostH = wb.height();
+            } else if (hostW != wb.width() || hostH != wb.height()) {
+                host.relayout(wb.width(), wb.height());
+                hostW = wb.width();
+                hostH = wb.height();
+            }
+            if (attachedWindowId != sc.homeWindowId) {
+                attachAccessibilityOverlayToWindow(sc.homeWindowId,
+                        host.getSurfacePackage().getSurfaceControl());
+                attachedWindowId = sc.homeWindowId;
+                log("Calque attaché à la fenêtre de WhatsApp");
+            }
+            Map<String, Rect> local = new HashMap<>();
+            for (Map.Entry<String, Rect> e : want.entrySet()) {
+                Rect r = e.getValue();
+                local.put(e.getKey(), new Rect(r.left - wb.left, r.top - wb.top,
+                        r.right - wb.left, r.bottom - wb.top));
+            }
+            hostCanvas.set(local);
+            return true;
+        } catch (Throwable t) {
+            attachOk = false;
+            log("Calque attaché impossible, mode normal : " + t);
+            return false;
+        }
+    }
+
     private void ensureCanvas() {
         if (canvas != null || wm == null) return;
         MaskCanvas c = new MaskCanvas(this);
@@ -1405,7 +1462,7 @@ public class MaskService extends AccessibilityService {
     private void showMasks(Map<String, Rect> want, int unusedColor) {
         if (wm == null) return;
         ensureCanvas();
-        if (canvas != null) canvas.set(want);
+        if (canvas != null) canvas.set(drawOnDisplay ? want : new HashMap<>());
         int m = dp(2);
         for (String key : KEYS) {
             Rect r = want.get(key);
