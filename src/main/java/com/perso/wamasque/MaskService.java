@@ -234,7 +234,10 @@ public class MaskService extends AccessibilityService {
                     showMasks(new HashMap<>(), 0);
                 }
             } else if (pk != null && !isWa(pk) && !pk.toString().equals("com.android.systemui")) {
-                showMasks(new HashMap<>(), 0);
+                // seulement si WhatsApp n'est plus au premier plan : sinon c'est un clavier,
+                // une notification ou une fenêtre système, et les caches doivent rester
+                AccessibilityNodeInfo top = getRootInActiveWindow();
+                if (top == null || !isWa(top.getPackageName())) showMasks(new HashMap<>(), 0);
             }
         }
         int type = e.getEventType();
@@ -446,7 +449,7 @@ public class MaskService extends AccessibilityService {
                 }
             } else if (old != null) {
                 Long seen = lastSeen.get(key);
-                long grace = now < motionUntil ? 400 : 80;   // court à l'arrêt, long en animation
+                long grace = now < motionUntil ? 500 : 300;   // assez long pour absorber les clignotements
                 if (dropNow.contains(key)) grace = 0;        // l'élément a vraiment été remplacé
                 if (seen != null && now - seen < grace) out.put(key, old);
             }
