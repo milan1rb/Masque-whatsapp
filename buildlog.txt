@@ -1,0 +1,51 @@
+Starting a Gradle Daemon (subsequent builds will be faster)
+> Task :preBuild UP-TO-DATE
+> Task :preDebugBuild UP-TO-DATE
+> Task :mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :javaPreCompileDebug
+> Task :generateDebugResValues
+> Task :checkDebugAarMetadata
+> Task :mapDebugSourceSetPaths
+> Task :generateDebugResources
+> Task :packageDebugResources
+> Task :mergeDebugResources
+> Task :createDebugCompatibleScreenManifests
+> Task :extractDeepLinksDebug
+> Task :parseDebugLocalResources
+> Task :processDebugMainManifest
+> Task :processDebugManifest
+> Task :mergeDebugShaders
+> Task :compileDebugShaders NO-SOURCE
+> Task :generateDebugAssets UP-TO-DATE
+> Task :mergeDebugAssets
+> Task :processDebugManifestForPackage
+> Task :compressDebugAssets
+> Task :desugarDebugFileDependencies
+> Task :processDebugJavaRes NO-SOURCE
+> Task :mergeDebugStartupProfile
+> Task :checkDebugDuplicateClasses
+> Task :mergeDebugJniLibFolders
+> Task :mergeExtDexDebug
+> Task :mergeLibDexDebug
+> Task :mergeDebugNativeLibs NO-SOURCE
+> Task :stripDebugDebugSymbols NO-SOURCE
+> Task :mergeDebugJavaResource
+> Task :processDebugResources
+> Task :validateSigningDebug
+
+> Task :compileDebugJavaWithJavac
+Note: /home/runner/work/Masque-whatsapp/Masque-whatsapp/src/main/java/com/perso/wamasque/MaskService.java uses or overrides a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+
+> Task :dexBuilderDebug
+> Task :mergeDebugGlobalSynthetics
+> Task :writeDebugAppMetadata
+> Task :writeDebugSigningConfigVersions
+> Task :mergeProjectDexDebug
+> Task :packageDebug
+> Task :createDebugApkListingFileRedirect
+> Task :assembleDebug
+gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run-1789767183219.json
+
+BUILD SUCCESSFUL in 24s
+33 actionable tasks: 33 executed
