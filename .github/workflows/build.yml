@@ -19,7 +19,21 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-      - run: gradle assembleDebug
+      - name: Build
+        run: |
+          set -o pipefail
+          gradle assembleDebug 2>&1 | tee /tmp/build.log || echo "BUILD_FAILED" >> /tmp/build.log
+      - name: Publier le journal de compilation
+        if: always()
+        run: |
+          tail -c 60000 /tmp/build.log > buildlog.txt
+          git config user.name ci
+          git config user.email ci@example.com
+          git add -f buildlog.txt
+          git commit -m "journal de compilation" || true
+          git push origin HEAD:buildlog --force
+      - name: Verifier
+        run: grep -q BUILD_FAILED /tmp/build.log && exit 1 || true
       - run: cp build/outputs/apk/debug/*.apk WaMasque.apk
       - uses: actions/upload-artifact@v4
         with:
