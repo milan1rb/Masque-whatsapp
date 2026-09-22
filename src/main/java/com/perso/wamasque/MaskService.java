@@ -53,7 +53,7 @@ public class MaskService extends AccessibilityService {
     private static String lastLogMsg = "";
 
     private static final int COLOR_TEST = 0x88FF0000;
-    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3", "fb4", "fb5", "fb6", "fo1", "fo2", "fo3", "fo4", "fo5", "ms1", "ms2", "ms3", "ms4"};
+    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3", "fb4", "fb5", "fb6", "fo1", "fo2", "fo3", "fo4", "fo5", "ms1", "ms2", "ms3", "ms4", "ms5", "fobar"};
     static final String DEFAULT_COLOR_MS = "#000000";
     static final String DEFAULT_COLOR_FO = "#242526";
     static final String MESSENGER = "com.facebook.orca";
@@ -1442,27 +1442,137 @@ public class MaskService extends AccessibilityService {
             List<Item> items = new ArrayList<>();
             collect(root, 0, items, 1500);
             List<Rect> found = new ArrayList<>();
+            List<Item> tabs = new ArrayList<>();
+            foTyping = false;
             for (Item it : items) {
                 if (it.visible && it.node.isClickable() && it.r.centerY() > slot.top
                         && it.r.centerY() < slot.bottom && it.r.width() > W / 10 && it.r.width() < W / 3) {
+                    int before = found.size();
                     addTab(found, it.r);
+                    if (found.size() > before) tabs.add(it);
                 }
+                // un champ de saisie en bas (commentaire, message) : la fausse barre s'efface
+                if (it.visible && it.node.isEditable() && it.r.centerY() > H * 0.6) foTyping = true;
             }
             foBarCached = found.size() >= 3;
+            if (tabs.size() == 5) {
+                tabs.sort((a, b) -> Integer.compare(a.r.left, b.r.left));
+                foNodes.clear();
+                for (Item it : tabs) foNodes.add(it.node);   // les vrais onglets, pour les actionner
+            }
         }
         if (foBarCached) {
             foSeen = now;
             foEver = true;
         }
-        boolean show = !foEver || now - foSeen < 200;
         Map<String, Rect> want = new HashMap<>();
-        if (show) {
-            for (int i = 1; i <= 5; i++) {
-                if (prefs.getBoolean("fo" + i, FO_DEFAULT[i - 1])) want.put("fo" + i, foRect(i));
+        if (prefs.getBoolean("fo_fakebar", true)) {
+            // Fausse barre : toujours là, sauf si l'on tape du texte en bas de l'écran
+            if (foEver && !foTyping && imeBounds() == null) {
+                Rect bar = new Rect(0, foRect(1).top, W, foRect(1).bottom);
+                want.put("fobar", bar);
+            }
+        } else {
+            boolean show = !foEver || now - foSeen < 200;
+            if (show) {
+                for (int i = 1; i <= 5; i++) {
+                    if (prefs.getBoolean("fo" + i, FO_DEFAULT[i - 1])) want.put("fo" + i, foRect(i));
+                }
             }
         }
         showMasks(want, 0);
         schedule(100);
+    }
+
+    private boolean foTyping = false;
+    private final List<AccessibilityNodeInfo> foNodes = new ArrayList<>();
+
+    // Appui sur la fausse barre : même fonctionnement que la barre d'origine
+    private void fakeBarTap(float x) {
+        int slot = Math.max(1, Math.min(5, (int) (x / (W / 5f)) + 1));
+        if (slot == 3 && prefs.getBoolean("fo3", true)) { openSaved(); return; }
+        if (slot == 5 && prefs.getBoolean("fo5", true)) { openMessenger(); return; }
+        if (foNodes.size() == 5) {
+            AccessibilityNodeInfo n = foNodes.get(slot - 1);
+            try {
+                n.refresh();
+                if (n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return;
+            } catch (Exception ignored) { }
+        }
+        log("Forum : l'onglet " + slot + " n'a pas pu être ouvert (barre d'origine pas encore vue)");
+    }
+
+    // Dessin de la fausse barre : fond, trait de séparation, cinq icônes
+    private void drawFakeBar(Canvas c, Rect g) {
+        Paint line = new Paint();
+        line.setColor(0xFF3E4042);
+        c.drawRect(g.left, g.top, g.right, g.top + 2, line);
+        float w = g.width() / 5f;
+        for (int i = 1; i <= 5; i++) {
+            Rect cell = new Rect((int) (g.left + (i - 1) * w), g.top, (int) (g.left + i * w), g.bottom);
+            if (i == 1) drawHome(c, cell);
+            else if (i == 2) drawAsk(c, cell);
+            else if (i == 3) {
+                if (prefs.getBoolean("fo3", true)) drawBookmark(c, cell); else drawPlus(c, cell);
+            } else if (i == 4) drawBell(c, cell);
+            else {
+                if (prefs.getBoolean("fo5", true)) drawMessenger(c, cell); else drawProfile(c, cell);
+            }
+        }
+    }
+
+    private void drawHome(Canvas c, Rect g) {
+        iconStyle();
+        float cx = g.centerX(), cy = g.centerY(), s = dp(13);
+        Path p = new Path();
+        p.moveTo(cx - s, cy - s * 0.1f);
+        p.lineTo(cx, cy - s);
+        p.lineTo(cx + s, cy - s * 0.1f);
+        p.lineTo(cx + s * 0.8f, cy + s);
+        p.lineTo(cx + s * 0.3f, cy + s);
+        p.lineTo(cx + s * 0.3f, cy + s * 0.3f);
+        p.lineTo(cx - s * 0.3f, cy + s * 0.3f);
+        p.lineTo(cx - s * 0.3f, cy + s);
+        p.lineTo(cx - s * 0.8f, cy + s);
+        p.close();
+        c.drawPath(p, iconPaint);
+    }
+
+    private void drawAsk(Canvas c, Rect g) {
+        iconStyle();
+        float cx = g.centerX(), cy = g.centerY(), r = dp(12);
+        c.drawCircle(cx - r * 0.15f, cy - r * 0.15f, r, iconPaint);
+        c.drawLine(cx - r * 0.15f, cy - r * 0.6f, cx - r * 0.15f, cy + r * 0.3f, iconPaint);
+        c.drawLine(cx - r * 0.6f, cy - r * 0.15f, cx + r * 0.3f, cy - r * 0.15f, iconPaint);
+        c.drawCircle(cx + r * 0.75f, cy + r * 0.85f, r * 0.45f, iconPaint);
+    }
+
+    private void drawPlus(Canvas c, Rect g) {
+        iconStyle();
+        float cx = g.centerX(), cy = g.centerY(), r = dp(14);
+        c.drawCircle(cx, cy, r, iconPaint);
+        c.drawLine(cx, cy - r * 0.5f, cx, cy + r * 0.5f, iconPaint);
+        c.drawLine(cx - r * 0.5f, cy, cx + r * 0.5f, cy, iconPaint);
+    }
+
+    private void drawBell(Canvas c, Rect g) {
+        iconStyle();
+        float cx = g.centerX(), cy = g.centerY(), s = dp(12);
+        Path p = new Path();
+        p.moveTo(cx - s, cy + s * 0.6f);
+        p.lineTo(cx - s * 0.75f, cy - s * 0.2f);
+        p.cubicTo(cx - s * 0.75f, cy - s * 1.1f, cx + s * 0.75f, cy - s * 1.1f, cx + s * 0.75f, cy - s * 0.2f);
+        p.lineTo(cx + s, cy + s * 0.6f);
+        p.close();
+        c.drawPath(p, iconPaint);
+        c.drawLine(cx - s * 0.3f, cy + s * 0.95f, cx + s * 0.3f, cy + s * 0.95f, iconPaint);
+    }
+
+    private void drawProfile(Canvas c, Rect g) {
+        iconStyle();
+        float cx = g.centerX(), cy = g.centerY(), r = dp(14);
+        c.drawCircle(cx, cy, r, iconPaint);
+        c.drawCircle(cx, cy - r * 0.25f, r * 0.35f, iconPaint);
     }
 
     private Rect foRect(int i) {
@@ -1550,6 +1660,13 @@ public class MaskService extends AccessibilityService {
         if (show) {
             for (int i = 1; i <= 4; i++) {
                 if (prefs.getBoolean("ms" + i, MS_DEFAULT[i - 1])) want.put("ms" + i, msRect(i));
+            }
+            // les 2 icônes en haut à droite (nouveau message, Facebook), sur l'écran principal
+            if (prefs.getBoolean("ms5", true)) {
+                int sb = 0;
+                int id = getResources().getIdentifier("status_bar_height", "dimen", "android");
+                if (id > 0) sb = getResources().getDimensionPixelSize(id);
+                want.put("ms5", new Rect((int) (W * 0.74), sb + dp(8), (int) (W * 0.98), sb + dp(62)));
             }
         }
         showMasks(want, 0);
@@ -1872,7 +1989,8 @@ public class MaskService extends AccessibilityService {
                     c.drawRoundRect(g.left, g.top, g.right, g.bottom, rad, rad, paint);
                 } else {
                     c.drawRect(g.left, g.top, g.right, g.bottom, paint);
-                    if (e.getKey().equals("fo5")) drawMessenger(c, g);
+                    if (e.getKey().equals("fobar")) drawFakeBar(c, g);
+                    else if (e.getKey().equals("fo5")) drawMessenger(c, g);
                     else if (e.getKey().equals("fo3")) drawBookmark(c, g);
                     else if (e.getKey().equals("ms4")) drawForum(c, g);
                 }
@@ -2080,6 +2198,10 @@ public class MaskService extends AccessibilityService {
                 if (key.equals("fo5")) v.setOnClickListener(x -> openMessenger());
                 else if (key.equals("fo3")) v.setOnClickListener(x -> openSaved());
                 else if (key.equals("ms4")) v.setOnClickListener(x -> openForum());
+                else if (key.equals("fobar")) v.setOnTouchListener((vv, ev) -> {
+                    if (ev.getAction() == android.view.MotionEvent.ACTION_UP) fakeBarTap(ev.getRawX());
+                    return true;
+                });
                 try { wm.addView(v, params(g)); slots.put(key, v); } catch (Exception ignored) { }
                 continue;
             }

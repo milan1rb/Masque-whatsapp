@@ -195,6 +195,7 @@ public class MainActivity extends Activity {
         title("Forum");
         help("Barre du bas à 5 cases. La 3e ouvre tes Enregistrements Facebook, la 5e ouvre Messenger.");
         check("fo_enabled", "Activer sur Forum", true);
+        check("fo_fakebar", "Fausse barre toujours visible (ne disparaît plus au défilement)", true);
         check("fo1", "1 · Accueil", false);
         check("fo2", "2 · Demander (IA)", false);
         check("fo3", "3 · Créer → remplacé par Enregistrements", true);
@@ -235,6 +236,7 @@ public class MainActivity extends Activity {
         check("ms2", "2 · Personnes", true);
         check("ms3", "3 · Notifications", true);
         check("ms4", "4 · Menu → remplacé par Forum", true);
+        check("ms5", "Icônes en haut à droite (nouveau message, Facebook)", true);
         hex("mscolor", MaskService.DEFAULT_COLOR_MS, "Couleur de la barre de Messenger");
 
         // ---------- Diagnostic (commun) ----------
