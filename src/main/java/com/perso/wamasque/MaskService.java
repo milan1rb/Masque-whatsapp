@@ -1653,14 +1653,19 @@ public class MaskService extends AccessibilityService {
         c.drawArc(cx - r * 0.6f, cy + r * 0.2f, cx + r * 0.6f, cy + r * 1.1f, 200, 140, false, iconPaint);
     }
 
-    private Rect foRect(int i) {
+    // Géométrie commune aux fausses barres (référence : Forum)
+    private Rect barGeom() {
         int nav = 0;
         int id = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
         if (id > 0) nav = getResources().getDimensionPixelSize(id);
         int bottom = H - nav;
-        int top = bottom - dp(78);
+        return new Rect(0, bottom - dp(78), W, bottom);
+    }
+
+    private Rect foRect(int i) {
+        Rect b = barGeom();
         int w = W / 5;
-        return new Rect((i - 1) * w, top, i * w, bottom);
+        return new Rect((i - 1) * w, b.top, i * w, b.bottom);
     }
 
     private void openMessenger() {
@@ -1776,8 +1781,7 @@ public class MaskService extends AccessibilityService {
             // bouton Meta AI : pastille ronde ou version allongée, juste au-dessus de la barre
             if (prefs.getBoolean("ms6", true)) {
                 // toujours la taille de la grande pastille « Demandez à Meta AI »
-                Rect bar = msRect(1);
-                int bottom = bar.top + dp(1);     // la pastille descend jusqu'au trait de la barre
+                int bottom = (msBarTop > 0 ? msBarTop : msRect(1).top) + dp(1);   // jusqu'au vrai trait
                 want.put("ms6", new Rect(W - dp(275), bottom - dp(60), W - dp(15), bottom));
             }
             // les 2 icônes en haut à droite (nouveau message, Facebook), sur l'écran principal
@@ -1796,12 +1800,9 @@ public class MaskService extends AccessibilityService {
         int nav = 0;
         int id = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
         if (id > 0) nav = getResources().getDimensionPixelSize(id);
-        int bottom = H - nav;
-        int top = bottom - dp(72);
-        if (msBarTop > 0) {               // mesure réelle, plus fiable que la hauteur annoncée par Android
-            top = msBarTop;
-            bottom = Math.min(H, top + dp(80));
-        }
+        Rect b = barGeom();                // même hauteur et même trait que la barre de Forum
+        int bottom = b.bottom;
+        int top = b.top;
         int w = W / 4;
         return new Rect((i - 1) * w, top, i * w, bottom);
     }
@@ -1812,8 +1813,8 @@ public class MaskService extends AccessibilityService {
     private int msSelected = 1;
 
     private void msBarTap(float x) {
-        int slot = Math.max(1, Math.min(4, (int) (x / (W / 4f)) + 1));
-        if (slot == 4) { openForum(); return; }
+        int slot = Math.max(1, Math.min(5, (int) (x / (W / 5f)) + 1));
+        if (slot == 5) { openForum(); return; }
         if (slot == 1 && msNodes.size() == 4) {
             try {
                 AccessibilityNodeInfo n = msNodes.get(0);
@@ -1827,40 +1828,56 @@ public class MaskService extends AccessibilityService {
         // cases 2 et 3 : bloquées
     }
 
-    // Barre Messenger dans le style de Forum : Discussions (actif, grisé) et Forum
+    // Barre Messenger identique à celle de Forum : même trait, même grille de 5 cases,
+    // même pastille, mêmes icônes. Discussions en case 1, Forum en case 5.
     private void drawMsBar(Canvas c, Rect g) {
         Paint line = new Paint();
-        line.setColor(0xFF262626);
+        line.setColor(0xFF3A3B3C);
         c.drawRect(g.left, g.top, g.right, g.top + Math.max(1, dp(1) / 2), line);
-        float w = g.width() / 4f;
+        float w = g.width() / 5f;
         Rect c1 = new Rect(g.left, g.top, (int) (g.left + w), g.bottom);
-        Rect c4 = new Rect((int) (g.left + 3 * w), g.top, g.right, g.bottom);
-        if (msSelected == 1) {               // grisé uniquement quand on est dans Discussions
+        Rect c5 = new Rect((int) (g.left + 4 * w), g.top, g.right, g.bottom);
+        boolean active = msSelected == 1;
+        if (active) {
             Paint pill = new Paint(Paint.ANTI_ALIAS_FLAG);
             pill.setColor(0xFF3A3B3C);
             float pw = dp(32), ph = dp(17);
             c.drawRoundRect(c1.centerX() - pw, c1.centerY() - ph, c1.centerX() + pw, c1.centerY() + ph, ph, ph, pill);
         }
-        // bulle de discussion pleine
-        Paint f = new Paint(Paint.ANTI_ALIAS_FLAG);
-        f.setColor(0xFFFFFFFF);
-        float cx = c1.centerX(), cy = c1.centerY() - dp(1), r = dp(11);
-        c.drawOval(cx - r * 1.1f, cy - r * 0.9f, cx + r * 1.1f, cy + r * 0.8f, f);
+        drawChat(c, c1, active);
+        iconColor = 0xFFE4E6EB;
+        drawForumLogo(c, c5);
+        iconColor = 0xFFFFFFFF;
+    }
+
+    // Bulle de discussion, dans le même trait que les icônes de Forum (pleine si active)
+    private void drawChat(Canvas c, Rect g, boolean filled) {
+        iconColor = filled ? 0xFFFFFFFF : 0xFFE4E6EB;
+        iconStyle();
+        float cx = g.centerX(), cy = g.centerY() - dp(1), r = dp(11);
+        Path p = new Path();
+        p.addOval(cx - r * 1.1f, cy - r * 0.9f, cx + r * 1.1f, cy + r * 0.8f, Path.Direction.CW);
         Path tail = new Path();
         tail.moveTo(cx - r * 0.7f, cy + r * 0.45f);
         tail.lineTo(cx - r * 0.95f, cy + r * 1.15f);
-        tail.lineTo(cx - r * 0.15f, cy + r * 0.7f);
-        tail.close();
-        c.drawPath(tail, f);
-        drawForumLogo(c, c4);
+        tail.lineTo(cx - r * 0.15f, cy + r * 0.72f);
+        if (filled) {
+            Paint f = new Paint(iconPaint);
+            f.setStyle(Paint.Style.FILL_AND_STROKE);
+            c.drawPath(p, f);
+            tail.close();
+            c.drawPath(tail, f);
+        } else {
+            c.drawPath(p, iconPaint);
+            c.drawPath(tail, iconPaint);
+        }
+        iconColor = 0xFFFFFFFF;
     }
 
-    // Logo Forum : deux guillemets arrondis, en blanc
     // Logo Forum simplifié : bulle de discussion au trait, trois lignes de texte
     private float logoScale = 1f;
 
     private void drawForumLogo(Canvas c, Rect g) {
-        iconColor = 0xFFFFFFFF;
         iconStyle();
         float k = logoScale;
         float cx = g.centerX(), cy = g.centerY() - dp(1) * k;
