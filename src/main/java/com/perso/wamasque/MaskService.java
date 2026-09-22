@@ -1324,7 +1324,7 @@ public class MaskService extends AccessibilityService {
         // Page des Enregistrements : flèche retour masquée, raccourci Forum à la place de la loupe
         if (prefs.getBoolean("fbsaved", true) && onSavedPage(root)) {
             int sb = statusBar();
-            int bottom = sb + dp(49);             // s'arrête juste au-dessus du trait de séparation
+            int bottom = sb + dp(46);             // s'arrête au-dessus du trait de séparation
             want.put("fbsvback", new Rect(0, sb, dp(64), bottom));
             want.put("fbsvforum", new Rect(W - dp(64), sb, W, bottom));
             savedPage = true;
@@ -1738,6 +1738,11 @@ public class MaskService extends AccessibilityService {
                 }
             }
             msBarCached = found.size() >= 3;
+            if (found.size() >= 3) {
+                int top = Integer.MAX_VALUE;
+                for (Rect r : found) top = Math.min(top, r.top);
+                msBarTop = top;           // le haut réel des onglets = le trait de séparation
+            }
             if (tabs.size() == 4) {
                 tabs.sort((a, b) -> Integer.compare(a.r.left, b.r.left));
                 msNodes.clear();
@@ -1772,7 +1777,8 @@ public class MaskService extends AccessibilityService {
             if (prefs.getBoolean("ms6", true)) {
                 // toujours la taille de la grande pastille « Demandez à Meta AI »
                 Rect bar = msRect(1);
-                want.put("ms6", new Rect(W - dp(275), bar.top - dp(68), W - dp(15), bar.top - dp(9)));
+                int bottom = bar.top + dp(1);     // la pastille descend jusqu'au trait de la barre
+                want.put("ms6", new Rect(W - dp(275), bottom - dp(60), W - dp(15), bottom));
             }
             // les 2 icônes en haut à droite (nouveau message, Facebook), sur l'écran principal
             if (prefs.getBoolean("ms5", true)) {
@@ -1792,12 +1798,17 @@ public class MaskService extends AccessibilityService {
         if (id > 0) nav = getResources().getDimensionPixelSize(id);
         int bottom = H - nav;
         int top = bottom - dp(72);
+        if (msBarTop > 0) {               // mesure réelle, plus fiable que la hauteur annoncée par Android
+            top = msBarTop;
+            bottom = Math.min(H, top + dp(80));
+        }
         int w = W / 4;
         return new Rect((i - 1) * w, top, i * w, bottom);
     }
 
     private final List<AccessibilityNodeInfo> msNodes = new ArrayList<>();
     private Rect msAi = null;
+    private int msBarTop = -1;
     private int msSelected = 1;
 
     private void msBarTap(float x) {
