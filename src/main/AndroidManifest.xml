@@ -5,6 +5,7 @@
         <package android:name="com.whatsapp" />
         <package android:name="com.facebook.katana" />
         <package android:name="com.facebook.orca" />
+        <package android:name="com.facebook.ember" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.HOME" />

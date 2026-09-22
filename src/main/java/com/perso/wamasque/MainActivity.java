@@ -172,6 +172,8 @@ public class MainActivity extends Activity {
         check("fb5", "5 · Notifications", false);
         check("fb6", "6 · Profil / menu", true);
         hex("fbcolor", MaskService.DEFAULT_COLOR_FB, "Couleur des caches sur Facebook");
+        check("fbsaved", "Page Enregistrements : flèche masquée, raccourci Forum en haut à droite", true);
+        hex("fbsvcolor", "#242526", "Couleur de la barre du haut des Enregistrements");
 
         title("Macro Facebook");
         help("À l'ouverture de Facebook, appuyer automatiquement sur une des 6 cases.");
@@ -232,6 +234,7 @@ public class MainActivity extends Activity {
         title("Messenger");
         help("Barre du bas à 4 cases. La 4e devient un bouton qui ramène sur Forum.");
         check("ms_enabled", "Activer sur Messenger", true);
+        check("ms_fakebar", "Barre du bas redessinée dans le style de Forum", true);
         check("ms1", "1 · Discussions", false);
         check("ms2", "2 · Personnes", true);
         check("ms3", "3 · Notifications", true);

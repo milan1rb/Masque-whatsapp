@@ -53,11 +53,11 @@ public class MaskService extends AccessibilityService {
     private static String lastLogMsg = "";
 
     private static final int COLOR_TEST = 0x88FF0000;
-    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3", "fb4", "fb5", "fb6", "fo1", "fo2", "fo3", "fo4", "fo5", "ms1", "ms2", "ms3", "ms4", "ms5", "ms6", "fobar"};
+    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3", "fb4", "fb5", "fb6", "fo1", "fo2", "fo3", "fo4", "fo5", "ms1", "ms2", "ms3", "ms4", "ms5", "ms6", "fobar", "msbar", "fbsvback", "fbsvforum"};
     static final String DEFAULT_COLOR_MS = "#000000";
     static final String DEFAULT_COLOR_FO = "#242526";
     static final String MESSENGER = "com.facebook.orca";
-    private static final String[] FORUM_GUESS = {"com.facebook.forum", "com.meta.forum", "com.facebook.groups"};
+    private static final String[] FORUM_GUESS = {"com.facebook.ember", "com.facebook.forum", "com.meta.forum"};
     static final String FB = "com.facebook.katana";
     static final String DEFAULT_COLOR_FB = "#FFFFFF";
     private static final String KEY_TOP = "colortop";
@@ -1063,6 +1063,13 @@ public class MaskService extends AccessibilityService {
 
     private int maskColor(String key) {
         if (prefs.getBoolean("debug", false)) return COLOR_TEST;
+        if (key.startsWith("fbsv")) {
+            try {
+                return Color.parseColor(prefs.getString("fbsvcolor", "#242526").trim());
+            } catch (Exception e) {
+                return Color.parseColor("#242526");
+            }
+        }
         if (key.startsWith("ms")) {
             try {
                 return Color.parseColor(prefs.getString("mscolor", DEFAULT_COLOR_MS).trim());
@@ -1314,6 +1321,12 @@ public class MaskService extends AccessibilityService {
                 if (prefs.getBoolean("fb" + i, FB_DEFAULT[i - 1])) want.put("fb" + i, fbRect(i));
             }
         }
+        // Page des Enregistrements : flèche retour masquée, raccourci Forum à la place de la loupe
+        if (prefs.getBoolean("fbsaved", true) && onSavedPage(root)) {
+            int sb = statusBar();
+            want.put("fbsvback", new Rect(0, sb + dp(4), dp(72), sb + dp(58)));
+            want.put("fbsvforum", new Rect(W - dp(72), sb + dp(4), W, sb + dp(58)));
+        }
         showMasks(want, 0);
 
         if (fbMacroPending) {
@@ -1326,6 +1339,21 @@ public class MaskService extends AccessibilityService {
             }
         }
         schedule(100);     // vérifie régulièrement : la barre peut partir sans évènement
+    }
+
+    private boolean onSavedPage(AccessibilityNodeInfo root) {
+        int sb = statusBar();
+        for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByText("Enregistrements")) {
+            Rect r = bounds(n);
+            if (n.isVisibleToUser() && r.centerY() < sb + dp(80) && r.centerX() > W * 0.25
+                    && r.centerX() < W * 0.75) return true;     // le titre, centré en haut
+        }
+        return false;
+    }
+
+    private int statusBar() {
+        int id = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        return id > 0 ? getResources().getDimensionPixelSize(id) : dp(24);
     }
 
     // Appuie sur une des 6 cases : d'abord par l'accessibilité (fonctionne même sous un cache),
@@ -1687,13 +1715,21 @@ public class MaskService extends AccessibilityService {
             List<Item> items = new ArrayList<>();
             collect(root, 0, items, 1500);
             List<Rect> found = new ArrayList<>();
+            List<Item> tabs = new ArrayList<>();
             for (Item it : items) {
                 if (it.visible && it.node.isClickable() && it.r.centerY() > slot.top
                         && it.r.centerY() < slot.bottom && it.r.width() > W / 10 && it.r.width() < W / 3) {
+                    int before = found.size();
                     addTab(found, it.r);
+                    if (found.size() > before) tabs.add(it);
                 }
             }
             msBarCached = found.size() >= 3;
+            if (tabs.size() == 4) {
+                tabs.sort((a, b) -> Integer.compare(a.r.left, b.r.left));
+                msNodes.clear();
+                for (Item it : tabs) msNodes.add(it.node);
+            }
         }
         if (msBarCached) {
             msSeen = now;
@@ -1702,8 +1738,13 @@ public class MaskService extends AccessibilityService {
         boolean show = !msEver || now - msSeen < 200;
         Map<String, Rect> want = new HashMap<>();
         if (show) {
-            for (int i = 1; i <= 4; i++) {
-                if (prefs.getBoolean("ms" + i, MS_DEFAULT[i - 1])) want.put("ms" + i, msRect(i));
+            if (prefs.getBoolean("ms_fakebar", true)) {
+                Rect r1 = msRect(1);
+                want.put("msbar", new Rect(0, r1.top, W, r1.bottom));
+            } else {
+                for (int i = 1; i <= 4; i++) {
+                    if (prefs.getBoolean("ms" + i, MS_DEFAULT[i - 1])) want.put("ms" + i, msRect(i));
+                }
             }
             // bouton Meta AI : pastille ronde ou version allongée, juste au-dessus de la barre
             if (prefs.getBoolean("ms6", true)) {
@@ -1743,8 +1784,73 @@ public class MaskService extends AccessibilityService {
         return new Rect((i - 1) * w, top, i * w, bottom);
     }
 
+    private final List<AccessibilityNodeInfo> msNodes = new ArrayList<>();
+
+    private void msBarTap(float x) {
+        int slot = Math.max(1, Math.min(4, (int) (x / (W / 4f)) + 1));
+        if (slot == 4) { openForum(); return; }
+        if (slot == 1 && msNodes.size() == 4) {
+            try {
+                AccessibilityNodeInfo n = msNodes.get(0);
+                n.refresh();
+                n.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            } catch (Exception ignored) { }
+        }
+        // cases 2 et 3 : bloquées
+    }
+
+    // Barre Messenger dans le style de Forum : Discussions (actif, grisé) et Forum
+    private void drawMsBar(Canvas c, Rect g) {
+        Paint line = new Paint();
+        line.setColor(0xFF262626);
+        c.drawRect(g.left, g.top, g.right, g.top + Math.max(1, dp(1) / 2), line);
+        float w = g.width() / 4f;
+        Rect c1 = new Rect(g.left, g.top, (int) (g.left + w), g.bottom);
+        Rect c4 = new Rect((int) (g.left + 3 * w), g.top, g.right, g.bottom);
+        Paint pill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        pill.setColor(0xFF303030);
+        float pw = dp(32), ph = dp(17);
+        c.drawRoundRect(c1.centerX() - pw, c1.centerY() - ph, c1.centerX() + pw, c1.centerY() + ph, ph, ph, pill);
+        // bulle de discussion pleine
+        Paint f = new Paint(Paint.ANTI_ALIAS_FLAG);
+        f.setColor(0xFFFFFFFF);
+        float cx = c1.centerX(), cy = c1.centerY() - dp(1), r = dp(11);
+        c.drawOval(cx - r * 1.1f, cy - r * 0.9f, cx + r * 1.1f, cy + r * 0.8f, f);
+        Path tail = new Path();
+        tail.moveTo(cx - r * 0.7f, cy + r * 0.45f);
+        tail.lineTo(cx - r * 0.95f, cy + r * 1.15f);
+        tail.lineTo(cx - r * 0.15f, cy + r * 0.7f);
+        tail.close();
+        c.drawPath(tail, f);
+        drawForumLogo(c, c4);
+    }
+
+    // Logo Forum : deux guillemets arrondis, en blanc
+    private void drawForumLogo(Canvas c, Rect g) {
+        Paint f = new Paint(Paint.ANTI_ALIAS_FLAG);
+        f.setColor(0xFFFFFFFF);
+        float s = dp(9);
+        float cx = g.centerX(), cy = g.centerY();
+        quote(c, f, cx - s * 0.9f, cy + s * 0.25f, s);     // guillemet de gauche, plus bas
+        quote(c, f, cx + s * 0.55f, cy - s * 0.25f, s);    // guillemet de droite, plus haut
+    }
+
+    private void quote(Canvas c, Paint f, float x, float y, float s) {
+        Path p = new Path();
+        float w = s * 1.25f, h = s * 1.15f, rr = s * 0.35f;
+        p.addRoundRect(x - w / 2, y - h / 2, x + w / 2, y + h / 2, rr, rr, Path.Direction.CW);
+        c.drawPath(p, f);
+        Path tail = new Path();                                 // la queue du guillemet
+        tail.moveTo(x - w / 2, y + h / 2 - rr);
+        tail.quadTo(x - w / 2 + s * 0.1f, y + h / 2 + s * 0.95f, x - w / 2 + s * 0.2f, y + h / 2 + s * 1.05f);
+        tail.quadTo(x - w / 2 + s * 0.55f, y + h / 2 + s * 0.4f, x - w / 2 + s * 0.7f, y + h / 2 - 1);
+        tail.close();
+        c.drawPath(tail, f);
+    }
+
     private void openForum() {
         String fp = prefs.getString("forum_pkg", "");
+        if (fp.isEmpty()) fp = "com.facebook.ember";     // identifiant connu de Forum
         try {
             Intent i = fp.isEmpty() ? null : getPackageManager().getLaunchIntentForPackage(fp);
             if (i == null) {
@@ -1760,6 +1866,7 @@ public class MaskService extends AccessibilityService {
 
     // Icône Forum : deux bulles de discussion, avec le libellé comme les autres onglets
     private void drawForum(Canvas c, Rect g) {
+        if (true) { drawForumLogo(c, g); return; }
         iconStyle();
         float cx = g.centerX(), cy = g.top + g.height() * 0.40f, r = dp(11);
         c.drawRoundRect(cx - r * 1.4f, cy - r, cx + r * 0.6f, cy + r * 0.5f, r * 0.6f, r * 0.6f, iconPaint);
@@ -2050,6 +2157,8 @@ public class MaskService extends AccessibilityService {
                 } else {
                     c.drawRect(g.left, g.top, g.right, g.bottom, paint);
                     if (e.getKey().equals("fobar")) drawFakeBar(c, g);
+                    else if (e.getKey().equals("msbar")) drawMsBar(c, g);
+                    else if (e.getKey().equals("fbsvforum")) drawForumLogo(c, g);
                     else if (e.getKey().equals("fo5")) drawMessenger(c, g);
                     else if (e.getKey().equals("fo3")) drawBookmark(c, g);
                     else if (e.getKey().equals("ms4")) drawForum(c, g);
@@ -2264,6 +2373,11 @@ public class MaskService extends AccessibilityService {
                 if (key.equals("fo5")) v.setOnClickListener(x -> openMessenger());
                 else if (key.equals("fo3")) v.setOnClickListener(x -> openSaved());
                 else if (key.equals("ms4")) v.setOnClickListener(x -> openForum());
+                else if (key.equals("fbsvforum")) v.setOnClickListener(x -> openForum());
+                else if (key.equals("msbar")) v.setOnTouchListener((vv, ev) -> {
+                    if (ev.getAction() == android.view.MotionEvent.ACTION_UP) msBarTap(ev.getRawX());
+                    return true;
+                });
                 else if (key.equals("fobar")) v.setOnTouchListener((vv, ev) -> {
                     if (ev.getAction() == android.view.MotionEvent.ACTION_UP) fakeBarTap(ev.getRawX());
                     return true;
