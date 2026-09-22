@@ -2241,7 +2241,18 @@ public class MaskService extends AccessibilityService {
             for (Map.Entry<String, Rect> e : shown.entrySet()) {
                 Rect g = maskRect(e.getKey(), e.getValue());
                 paint.setColor(maskColor(e.getKey()));
-                if (e.getKey().equals("ms6")) {
+                if (e.getKey().equals("ms6") && (prefs.getBoolean("ai_debug", false)
+                        || prefs.getBoolean("adjust", false))) {
+                    // mode réglage : rectangle rouge, on voit le vrai bouton à travers
+                    Paint fill = new Paint();
+                    fill.setColor(0x33FF1744);
+                    c.drawRect(g.left, g.top, g.right, g.bottom, fill);
+                    Paint red = new Paint(Paint.ANTI_ALIAS_FLAG);
+                    red.setColor(0xFFFF1744);
+                    red.setStyle(Paint.Style.STROKE);
+                    red.setStrokeWidth(dp(2));
+                    c.drawRect(g.left + dp(1), g.top + dp(1), g.right - dp(1), g.bottom - dp(1), red);
+                } else if (e.getKey().equals("ms6")) {
                     float rad = g.height() / 2f;       // rond replié, pastille allongée dépliée
                     c.drawRoundRect(g.left, g.top, g.right, g.bottom, rad, rad, paint);
                 } else if (e.getKey().equals("metaai")) {

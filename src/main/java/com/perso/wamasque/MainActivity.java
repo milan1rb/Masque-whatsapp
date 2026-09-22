@@ -241,6 +241,7 @@ public class MainActivity extends Activity {
         check("ms4", "4 · Menu → remplacé par Forum", true);
         check("ms5", "Icônes en haut à droite (nouveau message, Facebook)", true);
         check("ms6", "Bouton Meta AI (rond ou allongé)", true);
+        check("ai_debug", "Afficher le cache Meta AI en rectangle rouge (pour le régler)", false);
         button("Ajuster le cache Meta AI dans Messenger", v -> {
             prefs.edit().putBoolean("adjust", true).apply();
             Intent ms = getPackageManager().getLaunchIntentForPackage("com.facebook.orca");
