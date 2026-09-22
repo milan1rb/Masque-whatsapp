@@ -344,6 +344,7 @@ public class MaskService extends AccessibilityService {
             return;
         }
 
+        if (!pkg.equals("com.android.systemui")) inFacebook = false;
         if (!isWa(pkg)) {
             hidePicker();
             hideTuner();
@@ -1206,8 +1207,18 @@ public class MaskService extends AccessibilityService {
     private long fbCheckTime = 0;
     private boolean fbBarEver = false;   // la détection a-t-elle déjà fonctionné ?
     private boolean fbLoggedFallback = false;
+    private boolean inFacebook = false;
+    private boolean fbMacroPending = false;
+    private long fbEnterTime = 0;
 
     private void handleFacebook(AccessibilityNodeInfo root, long now) {
+        if (!inFacebook) {
+            inFacebook = true;
+            fbEnterTime = now;
+            int slot = prefs.getInt("fb_macro", 0);
+            fbMacroPending = slot >= 1 && slot <= 6;
+            if (fbMacroPending) log("Facebook ouvert : macro vers le bouton " + slot);
+        }
         inWhatsApp = false;
         phase = 0;
         dimMasks = false;
@@ -1269,7 +1280,50 @@ public class MaskService extends AccessibilityService {
             }
         }
         showMasks(want, 0);
+
+        if (fbMacroPending) {
+            if (now - fbEnterTime > 8000) {
+                fbMacroPending = false;
+                log("Facebook : macro abandonnée, barre jamais trouvée");
+            } else if (bar && now - fbEnterTime > 400) {
+                fbMacroPending = false;
+                fbClick(root, prefs.getInt("fb_macro", 0));
+            }
+        }
         schedule(100);     // vérifie régulièrement : la barre peut partir sans évènement
+    }
+
+    // Appuie sur une des 6 cases : d'abord par l'accessibilité (fonctionne même sous un cache),
+    // sinon par un vrai geste si la case n'est pas masquée
+    private void fbClick(AccessibilityNodeInfo root, int slot) {
+        Rect r = fbRect(slot);
+        int cx = r.centerX(), cy = r.centerY();
+        List<Item> items = new ArrayList<>();
+        collect(root, 0, items, 1500);
+        AccessibilityNodeInfo best = null;
+        long bestArea = Long.MAX_VALUE;
+        for (Item it : items) {
+            if (it.visible && it.node.isClickable() && it.r.contains(cx, cy)) {
+                long area = (long) it.r.width() * it.r.height();
+                if (area < bestArea) { bestArea = area; best = it.node; }
+            }
+        }
+        if (best != null && best.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            log("Facebook : bouton " + slot + " ouvert");
+            return;
+        }
+        if (prefs.getBoolean("fb" + slot, FB_DEFAULT[slot - 1])) {
+            log("Facebook : bouton " + slot + " masqué, appui impossible");
+            return;
+        }
+        Path path = new Path();
+        path.moveTo(cx, cy);
+        startGesture();
+        boolean ok = dispatchGesture(new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(path, 0, 50)).build(),
+                callback("Appui Facebook"), null);
+        if (!ok) gestureBusy = false;
+        log("Facebook : appui sur le bouton " + slot + " (geste envoyé : " + ok + ")");
     }
 
     // La barre est présente si l'on trouve ses boutons en bas de l'écran

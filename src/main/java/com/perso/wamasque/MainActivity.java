@@ -153,6 +153,19 @@ public class MainActivity extends Activity {
         check("fb5", "5 · Notifications", false);
         check("fb6", "6 · Profil / menu", true);
         hex("fbcolor", MaskService.DEFAULT_COLOR_FB, "Couleur des caches sur Facebook");
+
+        title("Macro Facebook");
+        help("À l'ouverture de Facebook, appuyer automatiquement sur une des 6 cases.");
+        final String[] names = {"Aucune", "1 · Accueil", "2 · Vidéos", "3 · Amis",
+                "4 · Groupes", "5 · Notifications", "6 · Profil / menu"};
+        Button macro = new Button(this);
+        Runnable label = () -> macro.setText("Ouvrir au lancement : " + names[prefs.getInt("fb_macro", 0)]);
+        label.run();
+        macro.setOnClickListener(v -> {
+            prefs.edit().putInt("fb_macro", (prefs.getInt("fb_macro", 0) + 1) % names.length).apply();
+            label.run();
+        });
+        cur.addView(macro);
         button("Redétecter la position des boutons", v -> {
             prefs.edit().putBoolean("fb_reset", true).apply();
             toast("Positions redétectées à la prochaine ouverture de Facebook");
