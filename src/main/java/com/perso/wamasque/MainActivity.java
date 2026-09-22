@@ -27,6 +27,9 @@ public class MainActivity extends Activity {
     private TextView summary;
     private TextView dumpView;
     private LinearLayout root;
+    private LinearLayout cur;
+    private LinearLayout pageWa, pageFb;
+    private Button tabWa, tabFb;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -40,6 +43,7 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root);
         setContentView(scroll);
+        cur = root;
 
         // ---------- État ----------
         status = new TextView(this);
@@ -53,6 +57,30 @@ public class MainActivity extends Activity {
         summary = new TextView(this);
         summary.setPadding(0, dp(8), 0, 0);
         root.addView(summary);
+
+        // ---------- Choix de l'application ----------
+        LinearLayout apps = new LinearLayout(this);
+        apps.setOrientation(LinearLayout.HORIZONTAL);
+        apps.setPadding(0, dp(16), 0, 0);
+        tabWa = new Button(this);
+        tabWa.setText("WhatsApp");
+        tabFb = new Button(this);
+        tabFb.setText("Facebook");
+        LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        apps.addView(tabWa, half);
+        apps.addView(tabFb, half);
+        root.addView(apps);
+        pageWa = new LinearLayout(this);
+        pageWa.setOrientation(LinearLayout.VERTICAL);
+        pageFb = new LinearLayout(this);
+        pageFb.setOrientation(LinearLayout.VERTICAL);
+        root.addView(pageWa);
+        root.addView(pageFb);
+        tabWa.setOnClickListener(v -> showPage(false));
+        tabFb.setOnClickListener(v -> showPage(true));
+
+        cur = pageWa;
 
         // ---------- Éléments masqués ----------
         title("Éléments masqués");
@@ -84,15 +112,6 @@ public class MainActivity extends Activity {
         button("Régler les couleurs à l'œil dans WhatsApp", v -> openWhatsApp("tune"));
         check("debug", "Mode test : caches rouges transparents", false);
 
-        // ---------- Facebook ----------
-        title("Facebook");
-        help("Masque les boutons de gauche de la barre du bas de Facebook.");
-        check("fb_enabled", "Activer sur Facebook", true);
-        check("fb1", "1er bouton (Accueil)", true);
-        check("fb2", "2e bouton (Vidéos)", true);
-        check("fb3", "3e bouton (Amis)", true);
-        hex("fbcolor", MaskService.DEFAULT_COLOR_FB, "Couleur des caches sur Facebook");
-
         // ---------- Macro ----------
         title("Macro au lancement");
         help("Au démarrage de WhatsApp : ouvrir une liste et la placer à gauche.");
@@ -122,7 +141,25 @@ public class MainActivity extends Activity {
             toast("Apprentissage effacé");
         });
 
-        // ---------- Diagnostic ----------
+        // ---------- Page Facebook ----------
+        cur = pageFb;
+        title("Facebook");
+        help("Barre du bas : les boutons cochés sont masqués et bloqués en permanence.");
+        check("fb_enabled", "Activer sur Facebook", true);
+        check("fb1", "1 · Accueil", true);
+        check("fb2", "2 · Vidéos", true);
+        check("fb3", "3 · Amis", true);
+        check("fb4", "4 · Groupes", false);
+        check("fb5", "5 · Notifications", false);
+        check("fb6", "6 · Profil / menu", true);
+        hex("fbcolor", MaskService.DEFAULT_COLOR_FB, "Couleur des caches sur Facebook");
+        button("Redétecter la position des boutons", v -> {
+            prefs.edit().putBoolean("fb_reset", true).apply();
+            toast("Positions redétectées à la prochaine ouverture de Facebook");
+        });
+
+        // ---------- Diagnostic (commun) ----------
+        cur = root;
         title("Diagnostic");
         help("À envoyer en cas de problème : le journal indique ce que l'app a vu et fait.");
         button("Afficher", v -> dumpView.setText(MaskService.diagnostic()));
@@ -138,9 +175,18 @@ public class MainActivity extends Activity {
         root.addView(dumpView);
     }
 
+    private void showPage(boolean fb) {
+        pageWa.setVisibility(fb ? android.view.View.GONE : android.view.View.VISIBLE);
+        pageFb.setVisibility(fb ? android.view.View.VISIBLE : android.view.View.GONE);
+        tabWa.setTextColor(fb ? 0xFF888888 : 0xFF4CAF50);
+        tabFb.setTextColor(fb ? 0xFF4CAF50 : 0xFF888888);
+        prefs.edit().putBoolean("page_fb", fb).apply();
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
+        showPage(prefs.getBoolean("page_fb", false));
         refresh();
     }
 
@@ -172,7 +218,7 @@ public class MainActivity extends Activity {
         t.setTextSize(19);
         t.setTypeface(Typeface.DEFAULT_BOLD);
         t.setPadding(0, dp(24), 0, dp(2));
-        root.addView(t);
+        cur.addView(t);
     }
 
     private void help(String text) {
@@ -180,14 +226,14 @@ public class MainActivity extends Activity {
         t.setText(text);
         t.setTextSize(13);
         t.setPadding(0, 0, 0, dp(6));
-        root.addView(t);
+        cur.addView(t);
     }
 
     private void button(String text, android.view.View.OnClickListener l) {
         Button b = new Button(this);
         b.setText(text);
         b.setOnClickListener(l);
-        root.addView(b);
+        cur.addView(b);
     }
 
     private void check(String key, String label, boolean def) {
@@ -198,7 +244,7 @@ public class MainActivity extends Activity {
             prefs.edit().putBoolean(key, checked).apply();
             refresh();
         });
-        root.addView(cb);
+        cur.addView(cb);
     }
 
     private EditText field(String label, int inputType) {
@@ -206,11 +252,11 @@ public class MainActivity extends Activity {
         t.setText(label);
         t.setTextSize(13);
         t.setPadding(0, dp(8), 0, 0);
-        root.addView(t);
+        cur.addView(t);
         EditText e = new EditText(this);
         e.setSingleLine(true);
         e.setInputType(inputType);
-        root.addView(e);
+        cur.addView(e);
         return e;
     }
 

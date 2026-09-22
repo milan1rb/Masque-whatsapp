@@ -52,7 +52,7 @@ public class MaskService extends AccessibilityService {
     private static String lastLogMsg = "";
 
     private static final int COLOR_TEST = 0x88FF0000;
-    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3"};
+    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3", "fb4", "fb5", "fb6"};
     static final String FB = "com.facebook.katana";
     static final String DEFAULT_COLOR_FB = "#FFFFFF";
     private static final String KEY_TOP = "colortop";
@@ -1195,10 +1195,13 @@ public class MaskService extends AccessibilityService {
         tuner = null;
     }
 
-    // ---------- Facebook : les boutons de gauche de la barre du bas ----------
+    // ---------- Facebook : blocage constant de la barre du bas ----------
+    // La barre de Facebook a 6 boutons de même largeur. On mémorise leur position la
+    // première fois qu'on les voit (sinon on la calcule), puis les caches choisis restent
+    // posés en permanence tant que Facebook est à l'écran.
 
-    private final List<Rect> fbTabs = new ArrayList<>();
-    private long fbTabsTime = 0, lastFbDump = 0;
+    static final boolean[] FB_DEFAULT = {true, true, true, false, false, true};
+    private long lastFbDump = 0;
 
     private void handleFacebook(AccessibilityNodeInfo root, long now) {
         inWhatsApp = false;
@@ -1209,44 +1212,62 @@ public class MaskService extends AccessibilityService {
             return;
         }
         metrics();
-        List<Rect> tabs = new ArrayList<>();
-        // les onglets de Facebook sont décrits « …, onglet 1 sur 6 »
-        for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByText("onglet")) {
-            Rect r = bounds(n);
-            if (n.isVisibleToUser() && r.centerY() > H * 0.8 && r.width() < W / 3 && r.height() < H * 0.12) {
-                addTab(tabs, r);
-            }
+        if (prefs.getBoolean("fb_reset", false)) {
+            SharedPreferences.Editor ed = prefs.edit().putBoolean("fb_reset", false);
+            for (int i = 1; i <= 6; i++) ed.remove(fbKey(i));
+            ed.apply();
+            log("Facebook : positions réinitialisées");
         }
-        if (tabs.size() < 3) {
-            if (now - fbTabsTime < 500 && !fbTabs.isEmpty()) {
-                tabs = new ArrayList<>(fbTabs);          // résultat récent : pas de nouvelle analyse
-            } else {
-                // secours : les boutons cliquables tout en bas de l'écran
+        // apprentissage des positions réelles (une seule fois)
+        if (prefs.getString(fbKey(1), "").isEmpty()) {
+            List<Rect> tabs = new ArrayList<>();
+            for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByText("onglet")) {
+                Rect r = bounds(n);
+                if (n.isVisibleToUser() && r.centerY() > H * 0.8 && r.width() < W / 3) addTab(tabs, r);
+            }
+            if (tabs.size() == 6) {
+                tabs.sort((a, b) -> Integer.compare(a.left, b.left));
+                SharedPreferences.Editor ed = prefs.edit();
+                for (int i = 0; i < 6; i++) {
+                    Rect r = tabs.get(i);
+                    ed.putString(fbKey(i + 1), r.left + "," + r.top + "," + r.right + "," + r.bottom);
+                }
+                ed.apply();
+                log("Facebook : positions des 6 boutons retenues");
+            } else if (now - lastFbDump > 10000) {
+                lastFbDump = now;
                 List<Item> items = new ArrayList<>();
-                collect(root, 0, items, 1500);
-                tabs.clear();
-                for (Item it : items) {
-                    if (it.visible && it.node.isClickable() && it.r.centerY() > H * 0.85
-                            && it.r.width() > W / 10 && it.r.width() < W / 4) {
-                        addTab(tabs, it.r);
-                    }
-                }
-                if (now - lastFbDump > 5000) {
-                    lastFbDump = now;
-                    lastDump = dump(items, FB);
-                }
+                collect(root, 0, items, 800);
+                lastDump = dump(items, FB);
             }
         }
-        tabs.sort((a, b) -> Integer.compare(a.left, b.left));
-        fbTabs.clear();
-        fbTabs.addAll(tabs);
-        fbTabsTime = now;
-
         Map<String, Rect> want = new HashMap<>();
-        for (int i = 0; i < 3 && i < tabs.size(); i++) {
-            if (prefs.getBoolean("fb" + (i + 1), true)) want.put("fb" + (i + 1), tabs.get(i));
+        for (int i = 1; i <= 6; i++) {
+            if (prefs.getBoolean("fb" + i, FB_DEFAULT[i - 1])) want.put("fb" + i, fbRect(i));
         }
         showMasks(want, 0);
+    }
+
+    private String fbKey(int i) {
+        return "fbpos:" + i + ":" + W + "x" + H;
+    }
+
+    private Rect fbRect(int i) {
+        String[] n = prefs.getString(fbKey(i), "").split(",");
+        if (n.length == 4) {
+            try {
+                return new Rect(Integer.parseInt(n[0]), Integer.parseInt(n[1]),
+                        Integer.parseInt(n[2]), Integer.parseInt(n[3]));
+            } catch (NumberFormatException ignored) { }
+        }
+        // position calculée : 6 cases égales, au-dessus de la barre de navigation d'Android
+        int nav = 0;
+        int id = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
+        if (id > 0) nav = getResources().getDimensionPixelSize(id);
+        int bottom = H - nav;
+        int top = bottom - dp(88);
+        int w = W / 6;
+        return new Rect((i - 1) * w, top, i * w, bottom);
     }
 
     private void addTab(List<Rect> tabs, Rect r) {
@@ -1540,7 +1561,7 @@ public class MaskService extends AccessibilityService {
     private Rect maskRect(String key, Rect r) {
         boolean tab = key.equals("actus") || key.equals("commu")
                 || key.equals("disctxt") || key.equals("appelstxt");
-        int m = prefs.getInt("margin", 8);            // marge permanente, réglable
+        int m = key.startsWith("fb") ? 0 : prefs.getInt("margin", 8);   // marge permanente, réglable
         Rect g = tab ? new Rect(r.left - m, r.top + dp(1), r.right + m, r.bottom + m)
                      : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
 
