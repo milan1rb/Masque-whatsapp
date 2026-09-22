@@ -1202,6 +1202,10 @@ public class MaskService extends AccessibilityService {
 
     static final boolean[] FB_DEFAULT = {true, true, true, false, false, true};
     private long lastFbDump = 0;
+    private long fbBarSeen = 0;          // dernière fois que la barre a été vue
+    private long fbCheckTime = 0;
+    private boolean fbBarEver = false;   // la détection a-t-elle déjà fonctionné ?
+    private boolean fbLoggedFallback = false;
 
     private void handleFacebook(AccessibilityNodeInfo root, long now) {
         inWhatsApp = false;
@@ -1241,11 +1245,55 @@ public class MaskService extends AccessibilityService {
                 lastDump = dump(items, FB);
             }
         }
+        // Condition : la barre du bas doit être à l'écran
+        boolean bar = fbBarVisible(root, now);
+        if (bar) {
+            fbBarSeen = now;
+            fbBarEver = true;
+        }
+        boolean show;
+        if (!fbBarEver) {
+            // la barre n'a jamais pu être reconnue : on reste en blocage permanent plutôt que rien
+            show = true;
+            if (!fbLoggedFallback) {
+                fbLoggedFallback = true;
+                log("Facebook : barre non reconnue, blocage permanent (envoie-moi le diagnostic)");
+            }
+        } else {
+            show = now - fbBarSeen < 200;   // petit sursis pour ne pas clignoter
+        }
         Map<String, Rect> want = new HashMap<>();
-        for (int i = 1; i <= 6; i++) {
-            if (prefs.getBoolean("fb" + i, FB_DEFAULT[i - 1])) want.put("fb" + i, fbRect(i));
+        if (show) {
+            for (int i = 1; i <= 6; i++) {
+                if (prefs.getBoolean("fb" + i, FB_DEFAULT[i - 1])) want.put("fb" + i, fbRect(i));
+            }
         }
         showMasks(want, 0);
+        schedule(100);     // vérifie régulièrement : la barre peut partir sans évènement
+    }
+
+    // La barre est présente si l'on trouve ses boutons en bas de l'écran
+    private boolean fbBarVisible(AccessibilityNodeInfo root, long now) {
+        int count = 0;
+        for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByText("onglet")) {
+            Rect r = bounds(n);
+            if (n.isVisibleToUser() && r.centerY() > H * 0.8) count++;
+        }
+        if (count >= 3) return true;
+        // secours, au plus 3 fois par seconde : des boutons cliquables alignés à l'emplacement de la barre
+        if (now - fbCheckTime < 300) return now - fbBarSeen < 300;
+        fbCheckTime = now;
+        Rect slot = fbRect(1);
+        List<Item> items = new ArrayList<>();
+        collect(root, 0, items, 1500);
+        List<Rect> found = new ArrayList<>();
+        for (Item it : items) {
+            if (it.visible && it.node.isClickable() && it.r.centerY() > slot.top && it.r.centerY() < slot.bottom
+                    && it.r.width() > W / 10 && it.r.width() < W / 4) {
+                addTab(found, it.r);
+            }
+        }
+        return found.size() >= 3;
     }
 
     private String fbKey(int i) {
