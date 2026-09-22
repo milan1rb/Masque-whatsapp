@@ -1605,7 +1605,7 @@ public class MaskService extends AccessibilityService {
             "https://www.facebook.com/saved/"};
 
     void openSaved() {
-        int start = Math.max(0, Math.min(SAVED_URIS.length - 1, prefs.getInt("saved_method", 0)));
+        int start = Math.max(0, Math.min(SAVED_URIS.length - 1, prefs.getInt("saved_method", 1)));
         for (int k = 0; k < SAVED_URIS.length; k++) {
             String u = SAVED_URIS[(start + k) % SAVED_URIS.length];
             try {

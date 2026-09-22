@@ -206,11 +206,11 @@ public class MainActivity extends Activity {
         help("Si le bouton Enregistrements ouvre Facebook sans aller sur la bonne page, change de méthode et teste.");
         Button method = new Button(this);
         Runnable mLabel = () -> method.setText("Méthode Enregistrements : "
-                + (prefs.getInt("saved_method", 0) + 1) + " / " + MaskService.SAVED_URIS.length);
+                + (prefs.getInt("saved_method", 1) + 1) + " / " + MaskService.SAVED_URIS.length);
         mLabel.run();
         method.setOnClickListener(v -> {
             prefs.edit().putInt("saved_method",
-                    (prefs.getInt("saved_method", 0) + 1) % MaskService.SAVED_URIS.length).apply();
+                    (prefs.getInt("saved_method", 1) + 1) % MaskService.SAVED_URIS.length).apply();
             mLabel.run();
         });
         cur.addView(method);
