@@ -1715,9 +1715,10 @@ public class MaskService extends AccessibilityService {
             return;
         }
         metrics();
-        if (now - msCheckTime > 300) {
+        if (now - msCheckTime > 200) {
             msCheckTime = now;
             Rect slot = msRect(1);
+            msAi = null;
             List<Item> items = new ArrayList<>();
             collect(root, 0, items, 1500);
             List<Rect> found = new ArrayList<>();
@@ -1728,6 +1729,12 @@ public class MaskService extends AccessibilityService {
                     int before = found.size();
                     addTab(found, it.r);
                     if (found.size() > before) tabs.add(it);
+                }
+                // le bouton Meta AI : collé à droite, posé juste sur la barre, rond ou allongé
+                if (it.visible && it.node.isClickable() && it.r.right > W * 0.85
+                        && it.r.bottom <= slot.top + dp(8) && it.r.bottom > slot.top - dp(40)
+                        && it.r.height() > dp(36) && it.r.height() < dp(80) && it.r.width() >= dp(36)) {
+                    if (msAi == null || it.r.width() > msAi.width()) msAi = new Rect(it.r);
                 }
             }
             msBarCached = found.size() >= 3;
@@ -1763,17 +1770,10 @@ public class MaskService extends AccessibilityService {
             }
             // bouton Meta AI : pastille ronde ou version allongée, juste au-dessus de la barre
             if (prefs.getBoolean("ms6", true)) {
-                Rect ai = null;
-                for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByText("Meta AI")) {
-                    Rect r = bounds(n);
-                    if (!n.isVisibleToUser() || r.centerY() < H * 0.6 || r.bottom > msRect(1).top + dp(4)) continue;
-                    AccessibilityNodeInfo cl = clickableNode(n);
-                    Rect cr = bounds(cl);
-                    if (ai == null || cr.width() > ai.width()) ai = cr;
-                }
-                if (ai == null) {       // position habituelle de la pastille
+                Rect ai = msAi == null ? null : new Rect(msAi);
+                if (ai == null) {       // position habituelle de la pastille ronde
                     Rect bar = msRect(1);
-                    ai = new Rect(W - dp(62), bar.top - dp(66), W - dp(14), bar.top - dp(4));
+                    ai = new Rect(W - dp(76), bar.top - dp(58), W - dp(15), bar.top + dp(1));
                 }
                 want.put("ms6", ai);
             }
@@ -1794,12 +1794,13 @@ public class MaskService extends AccessibilityService {
         int id = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
         if (id > 0) nav = getResources().getDimensionPixelSize(id);
         int bottom = H - nav;
-        int top = bottom - dp(72);
+        int top = bottom - dp(82);
         int w = W / 4;
         return new Rect((i - 1) * w, top, i * w, bottom);
     }
 
     private final List<AccessibilityNodeInfo> msNodes = new ArrayList<>();
+    private Rect msAi = null;
     private int msSelected = 1;
 
     private void msBarTap(float x) {
@@ -2188,7 +2189,10 @@ public class MaskService extends AccessibilityService {
             for (Map.Entry<String, Rect> e : shown.entrySet()) {
                 Rect g = maskRect(e.getKey(), e.getValue());
                 paint.setColor(maskColor(e.getKey()));
-                if (e.getKey().equals("metaai") || e.getKey().equals("ms6")) {
+                if (e.getKey().equals("ms6")) {
+                    float rad = g.height() / 2f;       // rond replié, pastille allongée dépliée
+                    c.drawRoundRect(g.left, g.top, g.right, g.bottom, rad, rad, paint);
+                } else if (e.getKey().equals("metaai")) {
                     float rad = g.width() > g.height() * 1.4f
                             ? g.height() / 2f : Math.min(g.width(), g.height()) * 0.30f;
                     c.drawRoundRect(g.left, g.top, g.right, g.bottom, rad, rad, paint);
