@@ -201,6 +201,22 @@ public class MainActivity extends Activity {
         check("fo4", "4 · Notifications", false);
         check("fo5", "5 · Profil → remplacé par Messenger", true);
         hex("focolor", MaskService.DEFAULT_COLOR_FO, "Couleur de la barre de Forum");
+
+        help("Si le bouton Enregistrements ouvre Facebook sans aller sur la bonne page, change de méthode et teste.");
+        Button method = new Button(this);
+        Runnable mLabel = () -> method.setText("Méthode Enregistrements : "
+                + (prefs.getInt("saved_method", 0) + 1) + " / " + MaskService.SAVED_URIS.length);
+        mLabel.run();
+        method.setOnClickListener(v -> {
+            prefs.edit().putInt("saved_method",
+                    (prefs.getInt("saved_method", 0) + 1) % MaskService.SAVED_URIS.length).apply();
+            mLabel.run();
+        });
+        cur.addView(method);
+        button("Tester cette méthode", v -> {
+            if (MaskService.instance != null) MaskService.instance.openSaved();
+            else toast("Active d'abord le service");
+        });
         forumInfo = new TextView(this);
         forumInfo.setTextSize(13);
         forumInfo.setPadding(0, dp(8), 0, 0);

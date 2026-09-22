@@ -47,6 +47,7 @@ public class MaskService extends AccessibilityService {
     static final String KEY_DIM = "colordim";
     static volatile boolean running = false;
     static volatile boolean forceMacro = false;
+    static volatile MaskService instance = null;
     private static volatile String lastDump = "(aucune capture de l'écran principal de WhatsApp)";
     private static final StringBuilder LOG = new StringBuilder();
     private static String lastLogMsg = "";
@@ -181,6 +182,7 @@ public class MaskService extends AccessibilityService {
             if (ri != null) launcherPkg = ri.activityInfo.packageName;
         } catch (Exception ignored) { }
         running = true;
+        instance = this;
         log("Service connecté (gestes autorisés : "
                 + ((getServiceInfo().getCapabilities()
                 & AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0) + ")");
@@ -308,6 +310,7 @@ public class MaskService extends AccessibilityService {
     @Override
     public void onDestroy() {
         running = false;
+        instance = null;
         handler.removeCallbacks(tick);
         for (View v : slots.values()) {
             try { wm.removeView(v); } catch (Exception ignored) { }
@@ -1483,14 +1486,24 @@ public class MaskService extends AccessibilityService {
         }
     }
 
-    private void openSaved() {
-        String[] uris = {"https://www.facebook.com/saved/", "fb://saved"};
-        for (String u : uris) {
+    // Plusieurs adresses internes possibles pour les Enregistrements : Facebook accepte
+    // toutes ses adresses mais n'en honore que certaines, on laisse donc choisir la méthode.
+    static final String[] SAVED_URIS = {
+            "fb://facewebmodal/f?href=https%3A%2F%2Fm.facebook.com%2Fsaved%2F",
+            "fb://saved",
+            "fb://bookmarks/saved",
+            "https://www.facebook.com/saved/"};
+
+    void openSaved() {
+        int start = Math.max(0, Math.min(SAVED_URIS.length - 1, prefs.getInt("saved_method", 0)));
+        for (int k = 0; k < SAVED_URIS.length; k++) {
+            String u = SAVED_URIS[(start + k) % SAVED_URIS.length];
             try {
                 Intent i = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(u));
                 i.setPackage(FB);
-                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
                 startActivity(i);
+                log("Enregistrements : ouverture par " + u);
                 return;
             } catch (Exception ignored) { }
         }
