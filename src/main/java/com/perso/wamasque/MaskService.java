@@ -52,7 +52,9 @@ public class MaskService extends AccessibilityService {
     private static String lastLogMsg = "";
 
     private static final int COLOR_TEST = 0x88FF0000;
-    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt"};
+    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3"};
+    static final String FB = "com.facebook.katana";
+    static final String DEFAULT_COLOR_FB = "#FFFFFF";
     private static final String KEY_TOP = "colortop";
 
     private WindowManager wm;
@@ -337,6 +339,10 @@ public class MaskService extends AccessibilityService {
             return;
         }
         String pkg = String.valueOf(active.getPackageName());
+        if (pkg.equals(FB)) {
+            handleFacebook(active, SystemClock.uptimeMillis());
+            return;
+        }
 
         if (!isWa(pkg)) {
             hidePicker();
@@ -1035,6 +1041,13 @@ public class MaskService extends AccessibilityService {
 
     private int maskColor(String key) {
         if (prefs.getBoolean("debug", false)) return COLOR_TEST;
+        if (key.startsWith("fb")) {
+            try {
+                return Color.parseColor(prefs.getString("fbcolor", DEFAULT_COLOR_FB).trim());
+            } catch (Exception e) {
+                return Color.WHITE;
+            }
+        }
         boolean top = isTopKey(key);
         String pref = dimMasks ? KEY_DIM : (top ? KEY_TOP : "color");
         String def = dimMasks ? DEFAULT_COLOR_DIM : (top ? DEFAULT_COLOR_TOP : DEFAULT_COLOR);
@@ -1180,6 +1193,65 @@ public class MaskService extends AccessibilityService {
         if (tuner == null) return;
         try { wm.removeView(tuner); } catch (Exception ignored) { }
         tuner = null;
+    }
+
+    // ---------- Facebook : les boutons de gauche de la barre du bas ----------
+
+    private final List<Rect> fbTabs = new ArrayList<>();
+    private long fbTabsTime = 0, lastFbDump = 0;
+
+    private void handleFacebook(AccessibilityNodeInfo root, long now) {
+        inWhatsApp = false;
+        phase = 0;
+        dimMasks = false;
+        if (!prefs.getBoolean("fb_enabled", true)) {
+            showMasks(new HashMap<>(), 0);
+            return;
+        }
+        metrics();
+        List<Rect> tabs = new ArrayList<>();
+        // les onglets de Facebook sont décrits « …, onglet 1 sur 6 »
+        for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByText("onglet")) {
+            Rect r = bounds(n);
+            if (n.isVisibleToUser() && r.centerY() > H * 0.8 && r.width() < W / 3 && r.height() < H * 0.12) {
+                addTab(tabs, r);
+            }
+        }
+        if (tabs.size() < 3) {
+            if (now - fbTabsTime < 500 && !fbTabs.isEmpty()) {
+                tabs = new ArrayList<>(fbTabs);          // résultat récent : pas de nouvelle analyse
+            } else {
+                // secours : les boutons cliquables tout en bas de l'écran
+                List<Item> items = new ArrayList<>();
+                collect(root, 0, items, 1500);
+                tabs.clear();
+                for (Item it : items) {
+                    if (it.visible && it.node.isClickable() && it.r.centerY() > H * 0.85
+                            && it.r.width() > W / 10 && it.r.width() < W / 4) {
+                        addTab(tabs, it.r);
+                    }
+                }
+                if (now - lastFbDump > 5000) {
+                    lastFbDump = now;
+                    lastDump = dump(items, FB);
+                }
+            }
+        }
+        tabs.sort((a, b) -> Integer.compare(a.left, b.left));
+        fbTabs.clear();
+        fbTabs.addAll(tabs);
+        fbTabsTime = now;
+
+        Map<String, Rect> want = new HashMap<>();
+        for (int i = 0; i < 3 && i < tabs.size(); i++) {
+            if (prefs.getBoolean("fb" + (i + 1), true)) want.put("fb" + (i + 1), tabs.get(i));
+        }
+        showMasks(want, 0);
+    }
+
+    private void addTab(List<Rect> tabs, Rect r) {
+        for (Rect t : tabs) if (t.contains(r.centerX(), r.centerY()) || r.contains(t.centerX(), t.centerY())) return;
+        tabs.add(new Rect(r));
     }
 
     // ---------- Ajustement manuel des caches ----------

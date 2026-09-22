@@ -84,6 +84,15 @@ public class MainActivity extends Activity {
         button("Régler les couleurs à l'œil dans WhatsApp", v -> openWhatsApp("tune"));
         check("debug", "Mode test : caches rouges transparents", false);
 
+        // ---------- Facebook ----------
+        title("Facebook");
+        help("Masque les boutons de gauche de la barre du bas de Facebook.");
+        check("fb_enabled", "Activer sur Facebook", true);
+        check("fb1", "1er bouton (Accueil)", true);
+        check("fb2", "2e bouton (Vidéos)", true);
+        check("fb3", "3e bouton (Amis)", true);
+        hex("fbcolor", MaskService.DEFAULT_COLOR_FB, "Couleur des caches sur Facebook");
+
         // ---------- Macro ----------
         title("Macro au lancement");
         help("Au démarrage de WhatsApp : ouvrir une liste et la placer à gauche.");
