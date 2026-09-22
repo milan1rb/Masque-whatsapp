@@ -53,7 +53,7 @@ public class MaskService extends AccessibilityService {
     private static String lastLogMsg = "";
 
     private static final int COLOR_TEST = 0x88FF0000;
-    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3", "fb4", "fb5", "fb6", "fo1", "fo2", "fo3", "fo4", "fo5", "ms1", "ms2", "ms3", "ms4", "ms5", "fobar"};
+    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3", "fb4", "fb5", "fb6", "fo1", "fo2", "fo3", "fo4", "fo5", "ms1", "ms2", "ms3", "ms4", "ms5", "ms6", "fobar"};
     static final String DEFAULT_COLOR_MS = "#000000";
     static final String DEFAULT_COLOR_FO = "#242526";
     static final String MESSENGER = "com.facebook.orca";
@@ -1451,14 +1451,23 @@ public class MaskService extends AccessibilityService {
                     addTab(found, it.r);
                     if (found.size() > before) tabs.add(it);
                 }
-                // un champ de saisie en bas (commentaire, message) : la fausse barre s'efface
-                if (it.visible && it.node.isEditable() && it.r.centerY() > H * 0.6) foTyping = true;
+                // un champ de saisie posé sur la zone de la barre : la fausse barre s'efface
+                if (it.visible && it.node.isEditable() && Rect.intersects(it.r, slot)) foTyping = true;
             }
             foBarCached = found.size() >= 3;
             if (tabs.size() == 5) {
                 tabs.sort((a, b) -> Integer.compare(a.r.left, b.r.left));
                 foNodes.clear();
                 for (Item it : tabs) foNodes.add(it.node);   // les vrais onglets, pour les actionner
+                for (int i = 0; i < 5; i++) {
+                    Item it = tabs.get(i);
+                    String d = norm(it.desc);
+                    if (it.node.isSelected() || (d.contains("sélectionné") && !d.contains("non sélectionné"))
+                            || d.contains("selected")) {
+                        if (foSelected != i + 1 && canvas != null) canvas.invalidate();
+                        foSelected = i + 1;
+                    }
+                }
             }
         }
         if (foBarCached) {
@@ -1485,6 +1494,7 @@ public class MaskService extends AccessibilityService {
     }
 
     private boolean foTyping = false;
+    private int foSelected = 1;
     private final List<AccessibilityNodeInfo> foNodes = new ArrayList<>();
 
     // Appui sur la fausse barre : même fonctionnement que la barre d'origine
@@ -1496,21 +1506,34 @@ public class MaskService extends AccessibilityService {
             AccessibilityNodeInfo n = foNodes.get(slot - 1);
             try {
                 n.refresh();
-                if (n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return;
+                if (n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    foSelected = slot;                      // retour visuel immédiat
+                    if (canvas != null) canvas.invalidate();
+                    return;
+                }
             } catch (Exception ignored) { }
         }
         log("Forum : l'onglet " + slot + " n'a pas pu être ouvert (barre d'origine pas encore vue)");
     }
 
-    // Dessin de la fausse barre : fond, trait de séparation, cinq icônes
+    // Dessin de la fausse barre : fond, trait fin, cinq icônes au trait, onglet actif grisé
     private void drawFakeBar(Canvas c, Rect g) {
         Paint line = new Paint();
-        line.setColor(0xFF3E4042);
-        c.drawRect(g.left, g.top, g.right, g.top + 2, line);
+        line.setColor(0xFF3A3B3C);
+        c.drawRect(g.left, g.top, g.right, g.top + Math.max(1, dp(1) / 2), line);
         float w = g.width() / 5f;
         for (int i = 1; i <= 5; i++) {
             Rect cell = new Rect((int) (g.left + (i - 1) * w), g.top, (int) (g.left + i * w), g.bottom);
-            if (i == 1) drawHome(c, cell);
+            boolean active = i == foSelected;
+            if (active) {
+                Paint pill = new Paint(Paint.ANTI_ALIAS_FLAG);
+                pill.setColor(0xFF3A3B3C);
+                float pw = dp(32), ph = dp(17);
+                c.drawRoundRect(cell.centerX() - pw, cell.centerY() - ph,
+                        cell.centerX() + pw, cell.centerY() + ph, ph, ph, pill);
+            }
+            iconColor = active ? 0xFFFFFFFF : 0xFFE4E6EB;
+            if (i == 1) drawHome(c, cell, active);
             else if (i == 2) drawAsk(c, cell);
             else if (i == 3) {
                 if (prefs.getBoolean("fo3", true)) drawBookmark(c, cell); else drawPlus(c, cell);
@@ -1518,61 +1541,82 @@ public class MaskService extends AccessibilityService {
             else {
                 if (prefs.getBoolean("fo5", true)) drawMessenger(c, cell); else drawProfile(c, cell);
             }
+            iconColor = 0xFFFFFFFF;
         }
     }
 
-    private void drawHome(Canvas c, Rect g) {
+    private int iconColor = 0xFFFFFFFF;
+
+    // Maison aux angles arrondis, porte au centre (remplie quand l'onglet est actif)
+    private void drawHome(Canvas c, Rect g, boolean filled) {
         iconStyle();
-        float cx = g.centerX(), cy = g.centerY(), s = dp(13);
+        float cx = g.centerX(), cy = g.centerY() + dp(1), s = dp(11);
         Path p = new Path();
-        p.moveTo(cx - s, cy - s * 0.1f);
-        p.lineTo(cx, cy - s);
-        p.lineTo(cx + s, cy - s * 0.1f);
-        p.lineTo(cx + s * 0.8f, cy + s);
-        p.lineTo(cx + s * 0.3f, cy + s);
-        p.lineTo(cx + s * 0.3f, cy + s * 0.3f);
-        p.lineTo(cx - s * 0.3f, cy + s * 0.3f);
-        p.lineTo(cx - s * 0.3f, cy + s);
-        p.lineTo(cx - s * 0.8f, cy + s);
+        p.moveTo(cx - s, cy - s * 0.15f);
+        p.lineTo(cx, cy - s * 1.05f);
+        p.lineTo(cx + s, cy - s * 0.15f);
+        p.lineTo(cx + s, cy + s);
+        p.lineTo(cx - s, cy + s);
         p.close();
-        c.drawPath(p, iconPaint);
+        if (filled) {
+            Paint f = new Paint(iconPaint);
+            f.setStyle(Paint.Style.FILL_AND_STROKE);
+            c.drawPath(p, f);
+            Paint door = new Paint(Paint.ANTI_ALIAS_FLAG);
+            door.setColor(0xFF3A3B3C);
+            c.drawRoundRect(cx - s * 0.32f, cy + s * 0.2f, cx + s * 0.32f, cy + s, dp(2), dp(2), door);
+        } else {
+            c.drawPath(p, iconPaint);
+            c.drawRoundRect(cx - s * 0.32f, cy + s * 0.2f, cx + s * 0.32f, cy + s, dp(2), dp(2), iconPaint);
+        }
     }
 
+    // Bulle de discussion avec l'étincelle de l'IA, comme l'onglet « Demander »
     private void drawAsk(Canvas c, Rect g) {
         iconStyle();
-        float cx = g.centerX(), cy = g.centerY(), r = dp(12);
-        c.drawCircle(cx - r * 0.15f, cy - r * 0.15f, r, iconPaint);
-        c.drawLine(cx - r * 0.15f, cy - r * 0.6f, cx - r * 0.15f, cy + r * 0.3f, iconPaint);
-        c.drawLine(cx - r * 0.6f, cy - r * 0.15f, cx + r * 0.3f, cy - r * 0.15f, iconPaint);
-        c.drawCircle(cx + r * 0.75f, cy + r * 0.85f, r * 0.45f, iconPaint);
+        float cx = g.centerX() - dp(2), cy = g.centerY() - dp(1), r = dp(11);
+        Path b = new Path();
+        b.addCircle(cx, cy, r, Path.Direction.CW);
+        c.drawPath(b, iconPaint);
+        Path spark = new Path();                  // étincelle à 4 branches
+        float k = r * 0.5f;
+        spark.moveTo(cx, cy - k);
+        spark.quadTo(cx, cy, cx + k, cy);
+        spark.quadTo(cx, cy, cx, cy + k);
+        spark.quadTo(cx, cy, cx - k, cy);
+        spark.quadTo(cx, cy, cx, cy - k);
+        c.drawPath(spark, iconPaint);
+        c.drawCircle(cx + r * 0.95f, cy + r * 0.95f, r * 0.42f, iconPaint);
     }
 
     private void drawPlus(Canvas c, Rect g) {
         iconStyle();
-        float cx = g.centerX(), cy = g.centerY(), r = dp(14);
+        float cx = g.centerX(), cy = g.centerY(), r = dp(12);
         c.drawCircle(cx, cy, r, iconPaint);
         c.drawLine(cx, cy - r * 0.5f, cx, cy + r * 0.5f, iconPaint);
         c.drawLine(cx - r * 0.5f, cy, cx + r * 0.5f, cy, iconPaint);
     }
 
+    // Cloche arrondie avec son battant
     private void drawBell(Canvas c, Rect g) {
         iconStyle();
-        float cx = g.centerX(), cy = g.centerY(), s = dp(12);
+        float cx = g.centerX(), cy = g.centerY() - dp(1), s = dp(10);
         Path p = new Path();
-        p.moveTo(cx - s, cy + s * 0.6f);
-        p.lineTo(cx - s * 0.75f, cy - s * 0.2f);
-        p.cubicTo(cx - s * 0.75f, cy - s * 1.1f, cx + s * 0.75f, cy - s * 1.1f, cx + s * 0.75f, cy - s * 0.2f);
-        p.lineTo(cx + s, cy + s * 0.6f);
+        p.moveTo(cx - s * 1.05f, cy + s * 0.75f);
+        p.quadTo(cx - s * 0.75f, cy + s * 0.45f, cx - s * 0.75f, cy - s * 0.05f);
+        p.cubicTo(cx - s * 0.75f, cy - s * 1.15f, cx + s * 0.75f, cy - s * 1.15f, cx + s * 0.75f, cy - s * 0.05f);
+        p.quadTo(cx + s * 0.75f, cy + s * 0.45f, cx + s * 1.05f, cy + s * 0.75f);
         p.close();
         c.drawPath(p, iconPaint);
-        c.drawLine(cx - s * 0.3f, cy + s * 0.95f, cx + s * 0.3f, cy + s * 0.95f, iconPaint);
+        c.drawArc(cx - s * 0.35f, cy + s * 0.75f, cx + s * 0.35f, cy + s * 1.35f, 0, 180, false, iconPaint);
     }
 
     private void drawProfile(Canvas c, Rect g) {
         iconStyle();
-        float cx = g.centerX(), cy = g.centerY(), r = dp(14);
+        float cx = g.centerX(), cy = g.centerY(), r = dp(12);
         c.drawCircle(cx, cy, r, iconPaint);
-        c.drawCircle(cx, cy - r * 0.25f, r * 0.35f, iconPaint);
+        c.drawCircle(cx, cy - r * 0.22f, r * 0.33f, iconPaint);
+        c.drawArc(cx - r * 0.6f, cy + r * 0.2f, cx + r * 0.6f, cy + r * 1.1f, 200, 140, false, iconPaint);
     }
 
     private Rect foRect(int i) {
@@ -1660,6 +1704,22 @@ public class MaskService extends AccessibilityService {
         if (show) {
             for (int i = 1; i <= 4; i++) {
                 if (prefs.getBoolean("ms" + i, MS_DEFAULT[i - 1])) want.put("ms" + i, msRect(i));
+            }
+            // bouton Meta AI : pastille ronde ou version allongée, juste au-dessus de la barre
+            if (prefs.getBoolean("ms6", true)) {
+                Rect ai = null;
+                for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByText("Meta AI")) {
+                    Rect r = bounds(n);
+                    if (!n.isVisibleToUser() || r.centerY() < H * 0.6 || r.bottom > msRect(1).top + dp(4)) continue;
+                    AccessibilityNodeInfo cl = clickableNode(n);
+                    Rect cr = bounds(cl);
+                    if (ai == null || cr.width() > ai.width()) ai = cr;
+                }
+                if (ai == null) {       // position habituelle de la pastille
+                    Rect bar = msRect(1);
+                    ai = new Rect(W - dp(62), bar.top - dp(66), W - dp(14), bar.top - dp(4));
+                }
+                want.put("ms6", ai);
             }
             // les 2 icônes en haut à droite (nouveau message, Facebook), sur l'écran principal
             if (prefs.getBoolean("ms5", true)) {
@@ -1983,7 +2043,7 @@ public class MaskService extends AccessibilityService {
             for (Map.Entry<String, Rect> e : shown.entrySet()) {
                 Rect g = maskRect(e.getKey(), e.getValue());
                 paint.setColor(maskColor(e.getKey()));
-                if (e.getKey().equals("metaai")) {
+                if (e.getKey().equals("metaai") || e.getKey().equals("ms6")) {
                     float rad = g.width() > g.height() * 1.4f
                             ? g.height() / 2f : Math.min(g.width(), g.height()) * 0.30f;
                     c.drawRoundRect(g.left, g.top, g.right, g.bottom, rad, rad, paint);
@@ -2001,9 +2061,9 @@ public class MaskService extends AccessibilityService {
     private final Paint iconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private void iconStyle() {
-        iconPaint.setColor(Color.WHITE);
+        iconPaint.setColor(iconColor);
         iconPaint.setStyle(Paint.Style.STROKE);
-        iconPaint.setStrokeWidth(dp(2) + 1);
+        iconPaint.setStrokeWidth(dp(2) + dp(1) / 3f);
         iconPaint.setStrokeJoin(Paint.Join.ROUND);
         iconPaint.setStrokeCap(Paint.Cap.ROUND);
     }
@@ -2011,7 +2071,7 @@ public class MaskService extends AccessibilityService {
     // Icône Messenger : bulle ronde avec l'éclair
     private void drawMessenger(Canvas c, Rect g) {
         iconStyle();
-        float cx = g.centerX(), cy = g.centerY(), r = dp(15);
+        float cx = g.centerX(), cy = g.centerY() - dp(1), r = dp(12);
         Path p = new Path();
         p.addCircle(cx, cy, r, Path.Direction.CW);
         c.drawPath(p, iconPaint);
@@ -2021,17 +2081,23 @@ public class MaskService extends AccessibilityService {
         tail.lineTo(cx - r * 0.25f, cy + r * 0.95f);
         c.drawPath(tail, iconPaint);
         Path bolt = new Path();
-        bolt.moveTo(cx - r * 0.55f, cy + r * 0.2f);
-        bolt.lineTo(cx - r * 0.15f, cy - r * 0.25f);
-        bolt.lineTo(cx + r * 0.1f, cy + r * 0.05f);
+        bolt.moveTo(cx - r * 0.55f, cy + r * 0.22f);
+        bolt.lineTo(cx - r * 0.18f, cy - r * 0.22f);
+        bolt.lineTo(cx + r * 0.08f, cy + r * 0.04f);
         bolt.lineTo(cx + r * 0.55f, cy - r * 0.3f);
-        c.drawPath(bolt, iconPaint);
+        bolt.lineTo(cx + r * 0.18f, cy + r * 0.14f);
+        bolt.lineTo(cx - r * 0.08f, cy - r * 0.1f);
+        bolt.close();
+        Paint fill = new Paint(iconPaint);
+        fill.setStyle(Paint.Style.FILL_AND_STROKE);
+        fill.setStrokeWidth(dp(1));
+        c.drawPath(bolt, fill);
     }
 
     // Icône Enregistrements : marque-page
     private void drawBookmark(Canvas c, Rect g) {
         iconStyle();
-        float cx = g.centerX(), cy = g.centerY(), w = dp(9), h = dp(13);
+        float cx = g.centerX(), cy = g.centerY(), w = dp(8), h = dp(11);
         Path p = new Path();
         p.moveTo(cx - w, cy - h);
         p.lineTo(cx + w, cy - h);

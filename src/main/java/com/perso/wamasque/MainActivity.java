@@ -237,6 +237,7 @@ public class MainActivity extends Activity {
         check("ms3", "3 · Notifications", true);
         check("ms4", "4 · Menu → remplacé par Forum", true);
         check("ms5", "Icônes en haut à droite (nouveau message, Facebook)", true);
+        check("ms6", "Bouton Meta AI (rond ou allongé)", true);
         hex("mscolor", MaskService.DEFAULT_COLOR_MS, "Couleur de la barre de Messenger");
 
         // ---------- Diagnostic (commun) ----------
