@@ -116,7 +116,7 @@ public class MainActivity extends Activity {
         title("Position et taille des caches");
         help("Les positions sont retenues automatiquement à la première utilisation.");
         number("margin", 8, 0, 60, "Marge autour de chaque cache, en pixels");
-        button("Ajuster la position dans WhatsApp", v -> openWhatsApp("adjust"));
+        button("Personnaliser les blocs dans WhatsApp", v -> openApp("com.whatsapp", "adjust"));
         button("Redétecter les positions", v -> {
             prefs.edit().putBoolean("reset_pos", true).apply();
             toast("Les positions seront redétectées à la prochaine ouverture");
@@ -172,6 +172,7 @@ public class MainActivity extends Activity {
         check("fb5", "5 · Notifications", false);
         check("fb6", "6 · Profil / menu", true);
         hex("fbcolor", MaskService.DEFAULT_COLOR_FB, "Couleur des caches sur Facebook");
+        button("Personnaliser les blocs dans Facebook", v -> openApp("com.facebook.katana", "adjust"));
         check("fbsaved", "Page Enregistrements : flèche masquée, raccourci Forum en haut à droite", true);
         hex("fbsvcolor", "#242526", "Couleur de la barre du haut des Enregistrements");
 
@@ -204,6 +205,10 @@ public class MainActivity extends Activity {
         check("fo4", "4 · Notifications", false);
         check("fo5", "5 · Profil → remplacé par Messenger", true);
         hex("focolor", MaskService.DEFAULT_COLOR_FO, "Couleur de la barre de Forum");
+        button("Personnaliser les blocs dans Forum", v -> {
+            String fp = prefs.getString("forum_pkg", "");
+            openApp(fp.isEmpty() ? "com.facebook.ember" : fp, "adjust");
+        });
 
         help("Si le bouton Enregistrements ouvre Facebook sans aller sur la bonne page, change de méthode et teste.");
         Button method = new Button(this);
@@ -253,9 +258,21 @@ public class MainActivity extends Activity {
             toast("Position d'origine rétablie");
         });
         hex("mscolor", MaskService.DEFAULT_COLOR_MS, "Couleur de la barre de Messenger");
+        button("Personnaliser les blocs dans Messenger", v -> openApp("com.facebook.orca", "adjust"));
 
         // ---------- Diagnostic (commun) ----------
         cur = root;
+        title("Personnalisation");
+        help("Chaque bloc peut être déplacé, redimensionné, recoloré et changé de forme "
+                + "avec le bouton « Personnaliser les blocs » de chaque application.");
+        button("Effacer toutes les personnalisations", v -> {
+            SharedPreferences.Editor ed = prefs.edit();
+            for (String k : prefs.getAll().keySet()) {
+                if (k.startsWith("adj:") || k.startsWith("col:") || k.startsWith("shape:")) ed.remove(k);
+            }
+            ed.apply();
+            toast("Personnalisations effacées");
+        });
         title("Diagnostic");
         help("À envoyer en cas de problème : le journal indique ce que l'app a vu et fait.");
         button("Afficher", v -> dumpView.setText(MaskService.diagnostic()));
@@ -393,6 +410,16 @@ public class MainActivity extends Activity {
                 prefs.edit().putString(key, c).apply();
             } catch (Exception ignored) { }
         }));
+    }
+
+    private void openApp(String pkg, String flag) {
+        Intent i = getPackageManager().getLaunchIntentForPackage(pkg);
+        if (i == null) {
+            toast("Application introuvable");
+            return;
+        }
+        if (flag != null) prefs.edit().putBoolean(flag, true).apply();
+        startActivity(i);
     }
 
     private void openWhatsApp(String flag) {

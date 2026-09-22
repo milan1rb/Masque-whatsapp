@@ -1063,6 +1063,10 @@ public class MaskService extends AccessibilityService {
 
     private int maskColor(String key) {
         if (prefs.getBoolean("debug", false)) return COLOR_TEST;
+        String own = prefs.getString("col:" + key, "");
+        if (!own.isEmpty() && !dimMasks) {
+            try { return Color.parseColor(own); } catch (Exception ignored) { }
+        }
         if (key.startsWith("fbsv") || (savedPage && key.startsWith("fb"))) {
             try {
                 return Color.parseColor(prefs.getString("fbsvcolor", "#242526").trim());
@@ -1254,6 +1258,7 @@ public class MaskService extends AccessibilityService {
     private long fbEnterTime = 0;
 
     private void handleFacebook(AccessibilityNodeInfo root, long now) {
+        adjusterTick();
         if (!inFacebook) {
             inFacebook = true;
             fbEnterTime = now;
@@ -1461,6 +1466,7 @@ public class MaskService extends AccessibilityService {
     }
 
     private void handleForum(AccessibilityNodeInfo root, long now) {
+        adjusterTick();
         inWhatsApp = false;
         inFacebook = false;
         phase = 0;
@@ -1711,14 +1717,7 @@ public class MaskService extends AccessibilityService {
     private boolean msEver = false, msBarCached = false;
 
     private void handleMessenger(AccessibilityNodeInfo root, long now) {
-        if (prefs.getBoolean("adjust", false)) {
-            if (adjuster == null) {
-                for (int i = 0; i < KEYS.length; i++) if (KEYS[i].equals("ms6")) adjustIndex = i;
-            }
-            showAdjuster();
-        } else {
-            hideAdjuster();
-        }
+        adjusterTick();
         inWhatsApp = false;
         inFacebook = false;
         phase = 0;
@@ -1959,108 +1958,184 @@ public class MaskService extends AccessibilityService {
         c.drawText("Forum", cx, g.top + g.height() * 0.86f, t);
     }
 
-    // ---------- Ajustement manuel des caches ----------
+    // ---------- Personnalisation à la main de chaque bloc (toutes les applications) ----------
+    // Panneau flottant : choix du bloc affiché, position, taille, forme et couleur.
+
+    private String adjKey = null;
+    private boolean adjLow = false;
+
+    private void adjusterTick() {
+        if (prefs.getBoolean("adjust", false)) showAdjuster(); else hideAdjuster();
+    }
 
     private void showAdjuster() {
         if (adjuster != null) return;
         android.widget.LinearLayout box = new android.widget.LinearLayout(this);
         box.setOrientation(android.widget.LinearLayout.VERTICAL);
-        box.setBackgroundColor(0xEE202020);
-        box.setPadding(dp(8), dp(8), dp(8), dp(8));
+        box.setBackgroundColor(0xEE1C1C1C);
+        box.setPadding(dp(6), dp(6), dp(6), dp(6));
 
         final android.widget.TextView label = new android.widget.TextView(this);
         label.setTextColor(0xFFFFFFFF);
+        label.setTextSize(12);
         box.addView(label);
-        Runnable refresh = () -> {
-            Rect r = KEYS[adjustIndex].equals("ms6") ? ms6Rect() : fixed.get(KEYS[adjustIndex]);
-            label.setText("Cache : " + adjustName(KEYS[adjustIndex])
-                    + (r == null ? " (pas encore détecté)" : " " + r.toShortString()));
+        final Runnable refresh = () -> {
+            if (adjKey == null || !shownKeys.contains(adjKey)) {
+                adjKey = shownKeys.isEmpty() ? null : shownKeys.get(0);
+            }
+            if (adjKey == null) {
+                label.setText("Aucun bloc affiché sur cet écran");
+            } else {
+                int sh = prefs.getInt("shape:" + adjKey, -1);
+                String[] shapes = {"rectangle", "arrondi", "pastille"};
+                label.setText(adjustName(adjKey) + "  ·  forme : " + (sh < 0 ? "auto" : shapes[sh])
+                        + "  ·  " + String.format("#%06X", maskColor(adjKey) & 0xFFFFFF));
+            }
+            if (canvas != null) canvas.invalidate();
         };
 
-        android.widget.Button pick = new android.widget.Button(this);
-        pick.setText("Changer de cache");
-        pick.setOnClickListener(v -> {
-            adjustIndex = (adjustIndex + 1) % KEYS.length;
-            refresh.run();
-        });
-        box.addView(pick);
-
-        box.addView(adjustRow(new String[]{"←", "→", "↑", "↓"},
-                new int[][]{{-4, 0, -4, 0}, {4, 0, 4, 0}, {0, -4, 0, -4}, {0, 4, 0, 4}}, refresh));
-        box.addView(adjustRow(new String[]{"larg -", "larg +", "haut -", "haut +"},
-                new int[][]{{0, 0, -4, 0}, {0, 0, 4, 0}, {0, 0, 0, -4}, {0, 0, 0, 4}}, refresh));
-
+        box.addView(row(new String[]{"◀ Bloc", "Bloc ▶", "Panneau ↕"}, new Runnable[]{
+                () -> { cycle(-1); refresh.run(); },
+                () -> { cycle(1); refresh.run(); },
+                () -> {
+                    adjLow = !adjLow;
+                    WindowManager.LayoutParams lp = (WindowManager.LayoutParams) adjuster.getLayoutParams();
+                    lp.y = (int) (H * (adjLow ? 0.55 : 0.12));
+                    try { wm.updateViewLayout(adjuster, lp); } catch (Exception ignored) { }
+                }}));
+        box.addView(row(new String[]{"←", "→", "↑", "↓"}, new Runnable[]{
+                () -> { nudge(-3, 0, -3, 0); refresh.run(); },
+                () -> { nudge(3, 0, 3, 0); refresh.run(); },
+                () -> { nudge(0, -3, 0, -3); refresh.run(); },
+                () -> { nudge(0, 3, 0, 3); refresh.run(); }}));
+        box.addView(row(new String[]{"larg −", "larg +", "haut −", "haut +"}, new Runnable[]{
+                () -> { nudge(2, 0, -2, 0); refresh.run(); },
+                () -> { nudge(-2, 0, 2, 0); refresh.run(); },
+                () -> { nudge(0, 2, 0, -2); refresh.run(); },
+                () -> { nudge(0, -2, 0, 2); refresh.run(); }}));
+        box.addView(row(new String[]{"Forme", "Plus clair", "Plus foncé", "Réinit."}, new Runnable[]{
+                () -> {
+                    if (adjKey == null) return;
+                    int sh = prefs.getInt("shape:" + adjKey, -1);
+                    prefs.edit().putInt("shape:" + adjKey, sh >= 2 ? -1 : sh + 1).apply();
+                    refresh.run();
+                },
+                () -> { tint(2, 2, 2); refresh.run(); },
+                () -> { tint(-2, -2, -2); refresh.run(); },
+                () -> {
+                    if (adjKey == null) return;
+                    prefs.edit().remove("adj:" + adjKey).remove("col:" + adjKey)
+                            .remove("shape:" + adjKey).apply();
+                    showMasks(lastWant, 0);
+                    refresh.run();
+                }}));
+        box.addView(row(new String[]{"R −", "R +", "V −", "V +", "B −", "B +"}, new Runnable[]{
+                () -> { tint(-1, 0, 0); refresh.run(); },
+                () -> { tint(1, 0, 0); refresh.run(); },
+                () -> { tint(0, -1, 0); refresh.run(); },
+                () -> { tint(0, 1, 0); refresh.run(); },
+                () -> { tint(0, 0, -1); refresh.run(); },
+                () -> { tint(0, 0, 1); refresh.run(); }}));
         android.widget.Button done = new android.widget.Button(this);
         done.setText("Terminé");
         done.setOnClickListener(v -> {
             prefs.edit().putBoolean("adjust", false).apply();
             hideAdjuster();
+            if (canvas != null) canvas.invalidate();
         });
         box.addView(done);
-        refresh.run();
 
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
-        lp.x = dp(12);
-        lp.y = (int) (H * 0.3);
+        lp.x = 0;
+        lp.y = (int) (H * (adjLow ? 0.55 : 0.12));
         lp.windowAnimations = 0;
         if (Build.VERSION.SDK_INT >= 30) lp.setFitInsetsTypes(0);
         try {
             wm.addView(box, lp);
             adjuster = box;
         } catch (Exception e) {
-            log("Ajustement impossible : " + e);
+            log("Réglage impossible : " + e);
         }
+        refresh.run();
+        // le panneau se remet à jour quand on change d'écran
+        handler.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (adjuster == null) return;
+                refresh.run();
+                handler.postDelayed(this, 700);
+            }
+        }, 700);
     }
 
-    private android.widget.LinearLayout adjustRow(String[] names, int[][] deltas, Runnable refresh) {
+    private android.widget.LinearLayout row(String[] names, Runnable[] actions) {
         android.widget.LinearLayout row = new android.widget.LinearLayout(this);
         row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
         for (int i = 0; i < names.length; i++) {
-            final int[] d = deltas[i];
+            final Runnable a = actions[i];
             android.widget.Button b = new android.widget.Button(this);
             b.setText(names[i]);
-            b.setOnClickListener(v -> {
-                String key = KEYS[adjustIndex];
-                if (key.equals("ms6")) {
-                    prefs.edit().putInt("ms6L", prefs.getInt("ms6L", 0) + d[0])
-                            .putInt("ms6T", prefs.getInt("ms6T", 0) + d[1])
-                            .putInt("ms6R", prefs.getInt("ms6R", 0) + d[2])
-                            .putInt("ms6B", prefs.getInt("ms6B", 0) + d[3]).apply();
-                    schedule(0);
-                    refresh.run();
-                    return;
-                }
-                Rect r = fixed.get(key);
-                if (r == null) return;
-                r.set(r.left + d[0], r.top + d[1], r.right + d[2], r.bottom + d[3]);
-                savePos(key, r);
-                if (canvas != null) canvas.invalidate();
-                showMasks(lastWant, 0);
-                refresh.run();
-            });
-            row.addView(b);
+            b.setTextSize(11);
+            b.setAllCaps(false);
+            b.setMinWidth(0);
+            b.setMinimumWidth(0);
+            b.setPadding(dp(2), 0, dp(2), 0);
+            b.setOnClickListener(v -> a.run());
+            row.addView(b, new android.widget.LinearLayout.LayoutParams(0,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         }
         return row;
     }
 
+    private void cycle(int dir) {
+        if (shownKeys.isEmpty()) { adjKey = null; return; }
+        int i = adjKey == null ? -1 : shownKeys.indexOf(adjKey);
+        i = (i + dir + shownKeys.size()) % shownKeys.size();
+        adjKey = shownKeys.get(i);
+    }
+
+    private void nudge(int dl, int dt, int dr, int db) {
+        if (adjKey == null) return;
+        int[] o = userOffsets(adjKey);
+        o[0] += dl; o[1] += dt; o[2] += dr; o[3] += db;
+        prefs.edit().putString("adj:" + adjKey, o[0] + "," + o[1] + "," + o[2] + "," + o[3]).apply();
+        showMasks(lastShownRaw, 0);
+    }
+
+    private void tint(int dr, int dg, int db) {
+        if (adjKey == null) return;
+        int c = maskColor(adjKey);
+        int n = Color.rgb(clamp(Color.red(c) + dr), clamp(Color.green(c) + dg), clamp(Color.blue(c) + db));
+        prefs.edit().putString("col:" + adjKey, String.format("#%06X", n & 0xFFFFFF)).apply();
+        if (canvas != null) canvas.invalidate();
+    }
+
     private static String adjustName(String key) {
         switch (key) {
-            case "title": return "Nom WhatsApp";
-            case "cam": return "Appareil photo";
-            case "metaai": return "Bouton IA";
-            case "actus": return "Onglet Actus";
-            case "commu": return "Onglet Communautés";
-            case "disctxt": return "Texte Discussions";
-            case "appelstxt": return "Texte Appels";
+            case "title": return "WhatsApp · nom";
+            case "cam": return "WhatsApp · appareil photo";
+            case "metaai": return "WhatsApp · bouton IA";
+            case "actus": return "WhatsApp · Actus";
+            case "commu": return "WhatsApp · Communautés";
+            case "disctxt": return "WhatsApp · texte Discussions";
+            case "appelstxt": return "WhatsApp · texte Appels";
+            case "fobar": return "Forum · barre";
+            case "msbar": return "Messenger · barre";
+            case "ms5": return "Messenger · icônes du haut";
             case "ms6": return "Messenger · bouton Meta AI";
-            default: return key;
+            case "fbsvback": return "Enregistrements · flèche";
+            case "fbsvforum": return "Enregistrements · raccourci Forum";
+            default:
+                if (key.startsWith("fb")) return "Facebook · case " + key.substring(2);
+                if (key.startsWith("fo")) return "Forum · case " + key.substring(2);
+                if (key.startsWith("ms")) return "Messenger · case " + key.substring(2);
+                return key;
         }
     }
 
@@ -2241,7 +2316,13 @@ public class MaskService extends AccessibilityService {
             for (Map.Entry<String, Rect> e : shown.entrySet()) {
                 Rect g = maskRect(e.getKey(), e.getValue());
                 paint.setColor(maskColor(e.getKey()));
-                if (e.getKey().equals("ms6") && (prefs.getBoolean("ai_debug", false)
+                int shape = prefs.getInt("shape:" + e.getKey(), -1);
+                if (shape >= 0) {
+                    // forme choisie à la main : 0 rectangle, 1 coins arrondis, 2 pastille
+                    float rad = shape == 0 ? 0 : (shape == 1 ? dp(12) : Math.min(g.width(), g.height()) / 2f);
+                    c.drawRoundRect(g.left, g.top, g.right, g.bottom, rad, rad, paint);
+                    drawIcons(c, e.getKey(), g);
+                } else if (e.getKey().equals("ms6") && (prefs.getBoolean("ai_debug", false)
                         || prefs.getBoolean("adjust", false))) {
                     // mode réglage : rectangle rouge, on voit le vrai bouton à travers
                     Paint fill = new Paint();
@@ -2261,12 +2342,29 @@ public class MaskService extends AccessibilityService {
                     c.drawRoundRect(g.left, g.top, g.right, g.bottom, rad, rad, paint);
                 } else {
                     c.drawRect(g.left, g.top, g.right, g.bottom, paint);
-                    if (e.getKey().equals("fobar")) drawFakeBar(c, g);
-                    else if (e.getKey().equals("msbar")) drawMsBar(c, g);
-                    else if (e.getKey().equals("fbsvforum")) { logoScale = 0.78f; drawForumLogo(c, g); logoScale = 1f; }
-                    else if (e.getKey().equals("fo5")) drawMessenger(c, g);
-                    else if (e.getKey().equals("fo3")) drawBookmark(c, g);
-                    else if (e.getKey().equals("ms4")) drawForum(c, g);
+                    drawIcons(c, e.getKey(), g);
+                }
+                if (adjuster != null && e.getKey().equals(adjKey)) {     // bloc en cours de réglage
+                    Paint red = new Paint(Paint.ANTI_ALIAS_FLAG);
+                    red.setColor(0xFFFF1744);
+                    red.setStyle(Paint.Style.STROKE);
+                    red.setStrokeWidth(dp(2));
+                    c.drawRect(g.left + dp(1), g.top + dp(1), g.right - dp(1), g.bottom - dp(1), red);
+                }
+            }
+        }
+    }
+
+    private void drawIcons(Canvas c, String key, Rect g) {
+        {
+            {
+                {
+                    if (key.equals("fobar")) drawFakeBar(c, g);
+                    else if (key.equals("msbar")) drawMsBar(c, g);
+                    else if (key.equals("fbsvforum")) { logoScale = 0.78f; drawForumLogo(c, g); logoScale = 1f; }
+                    else if (key.equals("fo5")) drawMessenger(c, g);
+                    else if (key.equals("fo3")) drawBookmark(c, g);
+                    else if (key.equals("ms4")) drawForum(c, g);
                 }
             }
         }
@@ -2443,14 +2541,42 @@ public class MaskService extends AccessibilityService {
 
     // Le dessin se fait dans une seule fenêtre transparente (instantané, une image suffit) ;
     // les petites fenêtres ci-dessous ne servent plus qu'à bloquer le toucher.
-    private void showMasks(Map<String, Rect> want, int unusedColor) {
+    private void showMasks(Map<String, Rect> want0, int unusedColor) {
         if (wm == null) return;
+        lastShownRaw = new HashMap<>(want0);
+        Map<String, Rect> want = applyUser(want0);      // réglages à la main de chaque bloc
+        shownKeys.clear();
+        shownKeys.addAll(want.keySet());
+        java.util.Collections.sort(shownKeys);
         ensureCanvas();
         if (canvas != null) canvas.set(drawOnDisplay ? want : new HashMap<>());
         // les fenêtres ci-dessous ne servent qu'à bloquer le toucher : on les met à jour
         // juste après, pour ne pas retarder l'image
         final Map<String, Rect> copy = new HashMap<>(want);
         handler.post(() -> touchWindows(copy));
+    }
+
+    private final List<String> shownKeys = new ArrayList<>();
+    private Map<String, Rect> lastShownRaw = new HashMap<>();
+
+    // Décalage des bords (gauche, haut, droite, bas) enregistré pour chaque bloc
+    private int[] userOffsets(String key) {
+        String[] n = prefs.getString("adj:" + key, "").split(",");
+        int[] o = new int[4];
+        if (n.length == 4) {
+            try { for (int i = 0; i < 4; i++) o[i] = Integer.parseInt(n[i]); } catch (Exception ignored) { }
+        }
+        return o;
+    }
+
+    private Map<String, Rect> applyUser(Map<String, Rect> in) {
+        Map<String, Rect> out = new HashMap<>();
+        for (Map.Entry<String, Rect> e : in.entrySet()) {
+            int[] o = userOffsets(e.getKey());
+            Rect r = e.getValue();
+            out.put(e.getKey(), new Rect(r.left + o[0], r.top + o[1], r.right + o[2], r.bottom + o[3]));
+        }
+        return out;
     }
 
     private void touchWindows(Map<String, Rect> want) {
