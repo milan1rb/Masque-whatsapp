@@ -1063,7 +1063,7 @@ public class MaskService extends AccessibilityService {
 
     private int maskColor(String key) {
         if (prefs.getBoolean("debug", false)) return COLOR_TEST;
-        if (key.startsWith("fbsv")) {
+        if (key.startsWith("fbsv") || (savedPage && key.startsWith("fb"))) {
             try {
                 return Color.parseColor(prefs.getString("fbsvcolor", "#242526").trim());
             } catch (Exception e) {
@@ -1324,8 +1324,12 @@ public class MaskService extends AccessibilityService {
         // Page des Enregistrements : flèche retour masquée, raccourci Forum à la place de la loupe
         if (prefs.getBoolean("fbsaved", true) && onSavedPage(root)) {
             int sb = statusBar();
-            want.put("fbsvback", new Rect(0, sb + dp(4), dp(72), sb + dp(58)));
-            want.put("fbsvforum", new Rect(W - dp(72), sb + dp(4), W, sb + dp(58)));
+            int bottom = sb + dp(48);             // la barre de titre fait 48 dp, trait non compris
+            want.put("fbsvback", new Rect(0, sb, dp(64), bottom));
+            want.put("fbsvforum", new Rect(W - dp(64), sb, W, bottom));
+            savedPage = true;
+        } else {
+            savedPage = false;
         }
         showMasks(want, 0);
 
@@ -1340,6 +1344,8 @@ public class MaskService extends AccessibilityService {
         }
         schedule(100);     // vérifie régulièrement : la barre peut partir sans évènement
     }
+
+    private boolean savedPage = false;
 
     private boolean onSavedPage(AccessibilityNodeInfo root) {
         int sb = statusBar();
@@ -1729,6 +1735,15 @@ public class MaskService extends AccessibilityService {
                 tabs.sort((a, b) -> Integer.compare(a.r.left, b.r.left));
                 msNodes.clear();
                 for (Item it : tabs) msNodes.add(it.node);
+                int sel = 0;
+                for (int i = 0; i < 4; i++) {
+                    Item it = tabs.get(i);
+                    String d = norm(it.desc) + " " + norm(it.text);
+                    if (it.node.isSelected() || (d.contains("sélectionné") && !d.contains("non sélectionné"))
+                            || d.contains("selected")) sel = i + 1;
+                }
+                if (sel != msSelected && canvas != null) canvas.invalidate();
+                msSelected = sel;
             }
         }
         if (msBarCached) {
@@ -1785,6 +1800,7 @@ public class MaskService extends AccessibilityService {
     }
 
     private final List<AccessibilityNodeInfo> msNodes = new ArrayList<>();
+    private int msSelected = 1;
 
     private void msBarTap(float x) {
         int slot = Math.max(1, Math.min(4, (int) (x / (W / 4f)) + 1));
@@ -1793,7 +1809,10 @@ public class MaskService extends AccessibilityService {
             try {
                 AccessibilityNodeInfo n = msNodes.get(0);
                 n.refresh();
-                n.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                if (n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    msSelected = 1;
+                    if (canvas != null) canvas.invalidate();
+                }
             } catch (Exception ignored) { }
         }
         // cases 2 et 3 : bloquées
@@ -1807,10 +1826,12 @@ public class MaskService extends AccessibilityService {
         float w = g.width() / 4f;
         Rect c1 = new Rect(g.left, g.top, (int) (g.left + w), g.bottom);
         Rect c4 = new Rect((int) (g.left + 3 * w), g.top, g.right, g.bottom);
-        Paint pill = new Paint(Paint.ANTI_ALIAS_FLAG);
-        pill.setColor(0xFF303030);
-        float pw = dp(32), ph = dp(17);
-        c.drawRoundRect(c1.centerX() - pw, c1.centerY() - ph, c1.centerX() + pw, c1.centerY() + ph, ph, ph, pill);
+        if (msSelected == 1) {               // grisé uniquement quand on est dans Discussions
+            Paint pill = new Paint(Paint.ANTI_ALIAS_FLAG);
+            pill.setColor(0xFF3A3B3C);
+            float pw = dp(32), ph = dp(17);
+            c.drawRoundRect(c1.centerX() - pw, c1.centerY() - ph, c1.centerX() + pw, c1.centerY() + ph, ph, ph, pill);
+        }
         // bulle de discussion pleine
         Paint f = new Paint(Paint.ANTI_ALIAS_FLAG);
         f.setColor(0xFFFFFFFF);
@@ -1826,13 +1847,30 @@ public class MaskService extends AccessibilityService {
     }
 
     // Logo Forum : deux guillemets arrondis, en blanc
+    // Logo Forum simplifié : bulle de discussion au trait, trois lignes de texte
     private void drawForumLogo(Canvas c, Rect g) {
-        Paint f = new Paint(Paint.ANTI_ALIAS_FLAG);
-        f.setColor(0xFFFFFFFF);
-        float s = dp(9);
-        float cx = g.centerX(), cy = g.centerY();
-        quote(c, f, cx - s * 0.9f, cy + s * 0.25f, s);     // guillemet de gauche, plus bas
-        quote(c, f, cx + s * 0.55f, cy - s * 0.25f, s);    // guillemet de droite, plus haut
+        iconColor = 0xFFFFFFFF;
+        iconStyle();
+        float cx = g.centerX(), cy = g.centerY() - dp(1);
+        float w = dp(12), h = dp(9), r = dp(4);
+        Path p = new Path();
+        p.moveTo(cx - w + r, cy - h);
+        p.lineTo(cx + w - r, cy - h);
+        p.quadTo(cx + w, cy - h, cx + w, cy - h + r);
+        p.lineTo(cx + w, cy + h - r);
+        p.quadTo(cx + w, cy + h, cx + w - r, cy + h);
+        p.lineTo(cx - w * 0.2f, cy + h);
+        p.lineTo(cx - w * 0.6f, cy + h + dp(5));        // la pointe de la bulle
+        p.lineTo(cx - w * 0.6f, cy + h);
+        p.lineTo(cx - w + r, cy + h);
+        p.quadTo(cx - w, cy + h, cx - w, cy + h - r);
+        p.lineTo(cx - w, cy - h + r);
+        p.quadTo(cx - w, cy - h, cx - w + r, cy - h);
+        p.close();
+        c.drawPath(p, iconPaint);
+        c.drawLine(cx - w * 0.55f, cy - h * 0.4f, cx + w * 0.55f, cy - h * 0.4f, iconPaint);
+        c.drawLine(cx - w * 0.55f, cy + h * 0.1f, cx + w * 0.55f, cy + h * 0.1f, iconPaint);
+        c.drawLine(cx - w * 0.55f, cy + h * 0.6f, cx + w * 0.15f, cy + h * 0.6f, iconPaint);
     }
 
     private void quote(Canvas c, Paint f, float x, float y, float s) {
