@@ -241,6 +241,16 @@ public class MainActivity extends Activity {
         check("ms4", "4 · Menu → remplacé par Forum", true);
         check("ms5", "Icônes en haut à droite (nouveau message, Facebook)", true);
         check("ms6", "Bouton Meta AI (rond ou allongé)", true);
+        button("Ajuster le cache Meta AI dans Messenger", v -> {
+            prefs.edit().putBoolean("adjust", true).apply();
+            Intent ms = getPackageManager().getLaunchIntentForPackage("com.facebook.orca");
+            if (ms == null) { toast("Messenger introuvable"); return; }
+            startActivity(ms);
+        });
+        button("Remettre le cache Meta AI à sa position d'origine", v -> {
+            prefs.edit().remove("ms6L").remove("ms6T").remove("ms6R").remove("ms6B").apply();
+            toast("Position d'origine rétablie");
+        });
         hex("mscolor", MaskService.DEFAULT_COLOR_MS, "Couleur de la barre de Messenger");
 
         // ---------- Diagnostic (commun) ----------

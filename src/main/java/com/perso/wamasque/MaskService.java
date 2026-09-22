@@ -1711,6 +1711,14 @@ public class MaskService extends AccessibilityService {
     private boolean msEver = false, msBarCached = false;
 
     private void handleMessenger(AccessibilityNodeInfo root, long now) {
+        if (prefs.getBoolean("adjust", false)) {
+            if (adjuster == null) {
+                for (int i = 0; i < KEYS.length; i++) if (KEYS[i].equals("ms6")) adjustIndex = i;
+            }
+            showAdjuster();
+        } else {
+            hideAdjuster();
+        }
         inWhatsApp = false;
         inFacebook = false;
         phase = 0;
@@ -1783,7 +1791,7 @@ public class MaskService extends AccessibilityService {
                 // toujours la taille de la grande pastille « Demandez à Meta AI »
                 // Position fixe, mesurée sur tes captures et ancrée au bas de l'écran :
                 // la pastille va de 413 px à 282 px du bas, le trait de la barre est juste dessous.
-                want.put("ms6", new Rect(W - dp(275), H - dp(158), W - dp(2), H - dp(108)));
+                want.put("ms6", ms6Rect());
             }
             // les 2 icônes en haut à droite (nouveau message, Facebook), sur l'écran principal
             if (prefs.getBoolean("ms5", true)) {
@@ -1806,6 +1814,11 @@ public class MaskService extends AccessibilityService {
         int top = b.top;
         int w = W / 4;
         return new Rect((i - 1) * w, top, i * w, bottom);
+    }
+
+    private Rect ms6Rect() {
+        return new Rect(W - dp(275) + prefs.getInt("ms6L", 0), H - dp(158) + prefs.getInt("ms6T", 0),
+                W - dp(2) + prefs.getInt("ms6R", 0), H - dp(108) + prefs.getInt("ms6B", 0));
     }
 
     private final List<AccessibilityNodeInfo> msNodes = new ArrayList<>();
@@ -1959,7 +1972,7 @@ public class MaskService extends AccessibilityService {
         label.setTextColor(0xFFFFFFFF);
         box.addView(label);
         Runnable refresh = () -> {
-            Rect r = fixed.get(KEYS[adjustIndex]);
+            Rect r = KEYS[adjustIndex].equals("ms6") ? ms6Rect() : fixed.get(KEYS[adjustIndex]);
             label.setText("Cache : " + adjustName(KEYS[adjustIndex])
                     + (r == null ? " (pas encore détecté)" : " " + r.toShortString()));
         };
@@ -2015,6 +2028,15 @@ public class MaskService extends AccessibilityService {
             b.setText(names[i]);
             b.setOnClickListener(v -> {
                 String key = KEYS[adjustIndex];
+                if (key.equals("ms6")) {
+                    prefs.edit().putInt("ms6L", prefs.getInt("ms6L", 0) + d[0])
+                            .putInt("ms6T", prefs.getInt("ms6T", 0) + d[1])
+                            .putInt("ms6R", prefs.getInt("ms6R", 0) + d[2])
+                            .putInt("ms6B", prefs.getInt("ms6B", 0) + d[3]).apply();
+                    schedule(0);
+                    refresh.run();
+                    return;
+                }
                 Rect r = fixed.get(key);
                 if (r == null) return;
                 r.set(r.left + d[0], r.top + d[1], r.right + d[2], r.bottom + d[3]);
@@ -2037,6 +2059,7 @@ public class MaskService extends AccessibilityService {
             case "commu": return "Onglet Communautés";
             case "disctxt": return "Texte Discussions";
             case "appelstxt": return "Texte Appels";
+            case "ms6": return "Messenger · bouton Meta AI";
             default: return key;
         }
     }
