@@ -1324,7 +1324,7 @@ public class MaskService extends AccessibilityService {
         // Page des Enregistrements : flèche retour masquée, raccourci Forum à la place de la loupe
         if (prefs.getBoolean("fbsaved", true) && onSavedPage(root)) {
             int sb = statusBar();
-            int bottom = sb + dp(48);             // la barre de titre fait 48 dp, trait non compris
+            int bottom = sb + dp(49);             // s'arrête juste au-dessus du trait de séparation
             want.put("fbsvback", new Rect(0, sb, dp(64), bottom));
             want.put("fbsvforum", new Rect(W - dp(64), sb, W, bottom));
             savedPage = true;
@@ -1770,12 +1770,9 @@ public class MaskService extends AccessibilityService {
             }
             // bouton Meta AI : pastille ronde ou version allongée, juste au-dessus de la barre
             if (prefs.getBoolean("ms6", true)) {
-                Rect ai = msAi == null ? null : new Rect(msAi);
-                if (ai == null) {       // position habituelle de la pastille ronde
-                    Rect bar = msRect(1);
-                    ai = new Rect(W - dp(76), bar.top - dp(58), W - dp(15), bar.top + dp(1));
-                }
-                want.put("ms6", ai);
+                // toujours la taille de la grande pastille « Demandez à Meta AI »
+                Rect bar = msRect(1);
+                want.put("ms6", new Rect(W - dp(275), bar.top - dp(68), W - dp(15), bar.top - dp(9)));
             }
             // les 2 icônes en haut à droite (nouveau message, Facebook), sur l'écran principal
             if (prefs.getBoolean("ms5", true)) {
@@ -1794,7 +1791,7 @@ public class MaskService extends AccessibilityService {
         int id = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
         if (id > 0) nav = getResources().getDimensionPixelSize(id);
         int bottom = H - nav;
-        int top = bottom - dp(82);
+        int top = bottom - dp(72);
         int w = W / 4;
         return new Rect((i - 1) * w, top, i * w, bottom);
     }
@@ -1849,11 +1846,14 @@ public class MaskService extends AccessibilityService {
 
     // Logo Forum : deux guillemets arrondis, en blanc
     // Logo Forum simplifié : bulle de discussion au trait, trois lignes de texte
+    private float logoScale = 1f;
+
     private void drawForumLogo(Canvas c, Rect g) {
         iconColor = 0xFFFFFFFF;
         iconStyle();
-        float cx = g.centerX(), cy = g.centerY() - dp(1);
-        float w = dp(12), h = dp(9), r = dp(4);
+        float k = logoScale;
+        float cx = g.centerX(), cy = g.centerY() - dp(1) * k;
+        float w = dp(12) * k, h = dp(9) * k, r = dp(4) * k;
         Path p = new Path();
         p.moveTo(cx - w + r, cy - h);
         p.lineTo(cx + w - r, cy - h);
@@ -1861,7 +1861,7 @@ public class MaskService extends AccessibilityService {
         p.lineTo(cx + w, cy + h - r);
         p.quadTo(cx + w, cy + h, cx + w - r, cy + h);
         p.lineTo(cx - w * 0.2f, cy + h);
-        p.lineTo(cx - w * 0.6f, cy + h + dp(5));        // la pointe de la bulle
+        p.lineTo(cx - w * 0.6f, cy + h + dp(5) * k);    // la pointe de la bulle
         p.lineTo(cx - w * 0.6f, cy + h);
         p.lineTo(cx - w + r, cy + h);
         p.quadTo(cx - w, cy + h, cx - w, cy + h - r);
@@ -2200,7 +2200,7 @@ public class MaskService extends AccessibilityService {
                     c.drawRect(g.left, g.top, g.right, g.bottom, paint);
                     if (e.getKey().equals("fobar")) drawFakeBar(c, g);
                     else if (e.getKey().equals("msbar")) drawMsBar(c, g);
-                    else if (e.getKey().equals("fbsvforum")) drawForumLogo(c, g);
+                    else if (e.getKey().equals("fbsvforum")) { logoScale = 0.78f; drawForumLogo(c, g); logoScale = 1f; }
                     else if (e.getKey().equals("fo5")) drawMessenger(c, g);
                     else if (e.getKey().equals("fo3")) drawBookmark(c, g);
                     else if (e.getKey().equals("ms4")) drawForum(c, g);
