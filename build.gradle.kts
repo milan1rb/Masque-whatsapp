@@ -10,8 +10,8 @@ android {
         applicationId = "com.perso.wamasque"
         minSdk = 26
         targetSdk = 34
-        versionCode = 64
-        versionName = "7.8"
+        versionCode = 65
+        versionName = "7.9"
     }
 
     compileOptions {
