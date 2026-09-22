@@ -1781,9 +1781,9 @@ public class MaskService extends AccessibilityService {
             // bouton Meta AI : pastille ronde ou version allongée, juste au-dessus de la barre
             if (prefs.getBoolean("ms6", true)) {
                 // toujours la taille de la grande pastille « Demandez à Meta AI »
-                // calé sur ta capture : du haut de la pastille jusqu'au-dessus du trait de la barre
-                int ref = msBarTop > 0 ? msBarTop : msRect(1).top;
-                want.put("ms6", new Rect(W - dp(275), ref - dp(90), W - dp(15), ref - dp(38)));
+                // Position fixe, mesurée sur tes captures et ancrée au bas de l'écran :
+                // la pastille va de 413 px à 282 px du bas, le trait de la barre est juste dessous.
+                want.put("ms6", new Rect(W - dp(275), H - dp(158), W - dp(2), H - dp(108)));
             }
             // les 2 icônes en haut à droite (nouveau message, Facebook), sur l'écran principal
             if (prefs.getBoolean("ms5", true)) {
