@@ -52,7 +52,10 @@ public class MaskService extends AccessibilityService {
     private static String lastLogMsg = "";
 
     private static final int COLOR_TEST = 0x88FF0000;
-    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3", "fb4", "fb5", "fb6"};
+    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3", "fb4", "fb5", "fb6", "fo1", "fo2", "fo3", "fo4", "fo5"};
+    static final String DEFAULT_COLOR_FO = "#242526";
+    static final String MESSENGER = "com.facebook.orca";
+    private static final String[] FORUM_GUESS = {"com.facebook.forum", "com.meta.forum", "com.facebook.groups"};
     static final String FB = "com.facebook.katana";
     static final String DEFAULT_COLOR_FB = "#FFFFFF";
     private static final String KEY_TOP = "colortop";
@@ -341,6 +344,16 @@ public class MaskService extends AccessibilityService {
         String pkg = String.valueOf(active.getPackageName());
         if (pkg.equals(FB)) {
             handleFacebook(active, SystemClock.uptimeMillis());
+            return;
+        }
+        if (prefs.getBoolean("forum_detect", false) && !pkg.equals(getPackageName())
+                && !pkg.equals(launcherPkg) && !pkg.equals("com.android.systemui")
+                && !isWa(pkg) && !pkg.equals(FB) && !pkg.equals(MESSENGER)) {
+            prefs.edit().putString("forum_pkg", pkg).putBoolean("forum_detect", false).apply();
+            log("Forum détecté : " + pkg);
+        }
+        if (isForum(pkg)) {
+            handleForum(active, SystemClock.uptimeMillis());
             return;
         }
 
@@ -1042,6 +1055,13 @@ public class MaskService extends AccessibilityService {
 
     private int maskColor(String key) {
         if (prefs.getBoolean("debug", false)) return COLOR_TEST;
+        if (key.startsWith("fo")) {
+            try {
+                return Color.parseColor(prefs.getString("focolor", DEFAULT_COLOR_FO).trim());
+            } catch (Exception e) {
+                return Color.parseColor(DEFAULT_COLOR_FO);
+            }
+        }
         if (key.startsWith("fb")) {
             try {
                 return Color.parseColor(prefs.getString("fbcolor", DEFAULT_COLOR_FB).trim());
@@ -1377,6 +1397,94 @@ public class MaskService extends AccessibilityService {
         tabs.add(new Rect(r));
     }
 
+    // ---------- Forum : barre du bas à 5 cases ----------
+    // Cases 3 et 5 remplacées : 3 ouvre les Enregistrements de Facebook, 5 ouvre Messenger.
+
+    static final boolean[] FO_DEFAULT = {false, false, true, false, true};
+    private long foSeen = 0, foCheckTime = 0;
+    private boolean foEver = false, foBarCached = false;
+
+    private boolean isForum(String pkg) {
+        String stored = prefs.getString("forum_pkg", "");
+        if (!stored.isEmpty()) return pkg.equals(stored);
+        for (String g : FORUM_GUESS) if (g.equals(pkg)) return true;
+        return false;
+    }
+
+    private void handleForum(AccessibilityNodeInfo root, long now) {
+        inWhatsApp = false;
+        inFacebook = false;
+        phase = 0;
+        dimMasks = false;
+        if (!prefs.getBoolean("fo_enabled", true)) {
+            showMasks(new HashMap<>(), 0);
+            return;
+        }
+        metrics();
+        if (now - foCheckTime > 300) {
+            foCheckTime = now;
+            Rect slot = foRect(1);
+            List<Item> items = new ArrayList<>();
+            collect(root, 0, items, 1500);
+            List<Rect> found = new ArrayList<>();
+            for (Item it : items) {
+                if (it.visible && it.node.isClickable() && it.r.centerY() > slot.top
+                        && it.r.centerY() < slot.bottom && it.r.width() > W / 10 && it.r.width() < W / 3) {
+                    addTab(found, it.r);
+                }
+            }
+            foBarCached = found.size() >= 3;
+        }
+        if (foBarCached) {
+            foSeen = now;
+            foEver = true;
+        }
+        boolean show = !foEver || now - foSeen < 200;
+        Map<String, Rect> want = new HashMap<>();
+        if (show) {
+            for (int i = 1; i <= 5; i++) {
+                if (prefs.getBoolean("fo" + i, FO_DEFAULT[i - 1])) want.put("fo" + i, foRect(i));
+            }
+        }
+        showMasks(want, 0);
+        schedule(100);
+    }
+
+    private Rect foRect(int i) {
+        int nav = 0;
+        int id = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
+        if (id > 0) nav = getResources().getDimensionPixelSize(id);
+        int bottom = H - nav;
+        int top = bottom - dp(78);
+        int w = W / 5;
+        return new Rect((i - 1) * w, top, i * w, bottom);
+    }
+
+    private void openMessenger() {
+        try {
+            Intent i = getPackageManager().getLaunchIntentForPackage(MESSENGER);
+            if (i == null) i = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse("fb-messenger://"));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) {
+            log("Messenger introuvable : " + e);
+        }
+    }
+
+    private void openSaved() {
+        String[] uris = {"https://www.facebook.com/saved/", "fb://saved"};
+        for (String u : uris) {
+            try {
+                Intent i = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(u));
+                i.setPackage(FB);
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+                return;
+            } catch (Exception ignored) { }
+        }
+        log("Impossible d'ouvrir les Enregistrements de Facebook");
+    }
+
     // ---------- Ajustement manuel des caches ----------
 
     private void showAdjuster() {
@@ -1655,15 +1763,61 @@ public class MaskService extends AccessibilityService {
                     c.drawRoundRect(g.left, g.top, g.right, g.bottom, rad, rad, paint);
                 } else {
                     c.drawRect(g.left, g.top, g.right, g.bottom, paint);
+                    if (e.getKey().equals("fo5")) drawMessenger(c, g);
+                    else if (e.getKey().equals("fo3")) drawBookmark(c, g);
                 }
             }
         }
     }
 
+    private final Paint iconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    private void iconStyle() {
+        iconPaint.setColor(Color.WHITE);
+        iconPaint.setStyle(Paint.Style.STROKE);
+        iconPaint.setStrokeWidth(dp(2) + 1);
+        iconPaint.setStrokeJoin(Paint.Join.ROUND);
+        iconPaint.setStrokeCap(Paint.Cap.ROUND);
+    }
+
+    // Icône Messenger : bulle ronde avec l'éclair
+    private void drawMessenger(Canvas c, Rect g) {
+        iconStyle();
+        float cx = g.centerX(), cy = g.centerY(), r = dp(15);
+        Path p = new Path();
+        p.addCircle(cx, cy, r, Path.Direction.CW);
+        c.drawPath(p, iconPaint);
+        Path tail = new Path();
+        tail.moveTo(cx - r * 0.75f, cy + r * 0.55f);
+        tail.lineTo(cx - r * 0.95f, cy + r * 1.15f);
+        tail.lineTo(cx - r * 0.25f, cy + r * 0.95f);
+        c.drawPath(tail, iconPaint);
+        Path bolt = new Path();
+        bolt.moveTo(cx - r * 0.55f, cy + r * 0.2f);
+        bolt.lineTo(cx - r * 0.15f, cy - r * 0.25f);
+        bolt.lineTo(cx + r * 0.1f, cy + r * 0.05f);
+        bolt.lineTo(cx + r * 0.55f, cy - r * 0.3f);
+        c.drawPath(bolt, iconPaint);
+    }
+
+    // Icône Enregistrements : marque-page
+    private void drawBookmark(Canvas c, Rect g) {
+        iconStyle();
+        float cx = g.centerX(), cy = g.centerY(), w = dp(9), h = dp(13);
+        Path p = new Path();
+        p.moveTo(cx - w, cy - h);
+        p.lineTo(cx + w, cy - h);
+        p.lineTo(cx + w, cy + h);
+        p.lineTo(cx, cy + h * 0.45f);
+        p.lineTo(cx - w, cy + h);
+        p.close();
+        c.drawPath(p, iconPaint);
+    }
+
     private Rect maskRect(String key, Rect r) {
         boolean tab = key.equals("actus") || key.equals("commu")
                 || key.equals("disctxt") || key.equals("appelstxt");
-        int m = key.startsWith("fb") ? 0 : prefs.getInt("margin", 8);   // marge permanente, réglable
+        int m = (key.startsWith("fb") || key.startsWith("fo")) ? 0 : prefs.getInt("margin", 8);   // marge permanente, réglable
         Rect g = tab ? new Rect(r.left - m, r.top + dp(1), r.right + m, r.bottom + m)
                      : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
 
@@ -1812,6 +1966,8 @@ public class MaskService extends AccessibilityService {
                 v = new View(this);
                 paint(v, key, maskColor(key));
                 v.setClickable(true);
+                if (key.equals("fo5")) v.setOnClickListener(x -> openMessenger());
+                else if (key.equals("fo3")) v.setOnClickListener(x -> openSaved());
                 try { wm.addView(v, params(g)); slots.put(key, v); } catch (Exception ignored) { }
                 continue;
             }

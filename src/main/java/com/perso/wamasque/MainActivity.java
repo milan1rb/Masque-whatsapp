@@ -26,10 +26,11 @@ public class MainActivity extends Activity {
     private TextView status;
     private TextView summary;
     private TextView dumpView;
+    private TextView forumInfo;
     private LinearLayout root;
     private LinearLayout cur;
-    private LinearLayout pageWa, pageFb;
-    private Button tabWa, tabFb;
+    private LinearLayout pageWa, pageFb, pageFo;
+    private Button tabWa, tabFb, tabFo;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -66,19 +67,26 @@ public class MainActivity extends Activity {
         tabWa.setText("WhatsApp");
         tabFb = new Button(this);
         tabFb.setText("Facebook");
-        LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(0,
+        tabFo = new Button(this);
+        tabFo.setText("Forum");
+        LinearLayout.LayoutParams third = new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        apps.addView(tabWa, half);
-        apps.addView(tabFb, half);
+        apps.addView(tabWa, third);
+        apps.addView(tabFb, third);
+        apps.addView(tabFo, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         root.addView(apps);
         pageWa = new LinearLayout(this);
         pageWa.setOrientation(LinearLayout.VERTICAL);
         pageFb = new LinearLayout(this);
         pageFb.setOrientation(LinearLayout.VERTICAL);
+        pageFo = new LinearLayout(this);
+        pageFo.setOrientation(LinearLayout.VERTICAL);
         root.addView(pageWa);
         root.addView(pageFb);
-        tabWa.setOnClickListener(v -> showPage(false));
-        tabFb.setOnClickListener(v -> showPage(true));
+        root.addView(pageFo);
+        tabWa.setOnClickListener(v -> showPage(0));
+        tabFb.setOnClickListener(v -> showPage(1));
+        tabFo.setOnClickListener(v -> showPage(2));
 
         cur = pageWa;
 
@@ -171,6 +179,26 @@ public class MainActivity extends Activity {
             toast("Positions redétectées à la prochaine ouverture de Facebook");
         });
 
+        // ---------- Page Forum ----------
+        cur = pageFo;
+        title("Forum");
+        help("Barre du bas à 5 cases. La 3e ouvre tes Enregistrements Facebook, la 5e ouvre Messenger.");
+        check("fo_enabled", "Activer sur Forum", true);
+        check("fo1", "1 · Accueil", false);
+        check("fo2", "2 · Demander (IA)", false);
+        check("fo3", "3 · Créer → remplacé par Enregistrements", true);
+        check("fo4", "4 · Notifications", false);
+        check("fo5", "5 · Profil → remplacé par Messenger", true);
+        hex("focolor", MaskService.DEFAULT_COLOR_FO, "Couleur de la barre de Forum");
+        forumInfo = new TextView(this);
+        forumInfo.setTextSize(13);
+        forumInfo.setPadding(0, dp(8), 0, 0);
+        cur.addView(forumInfo);
+        button("Détecter l'application Forum", v -> {
+            prefs.edit().putBoolean("forum_detect", true).apply();
+            toast("Ouvre maintenant l'application Forum");
+        });
+
         // ---------- Diagnostic (commun) ----------
         cur = root;
         title("Diagnostic");
@@ -188,22 +216,29 @@ public class MainActivity extends Activity {
         root.addView(dumpView);
     }
 
-    private void showPage(boolean fb) {
-        pageWa.setVisibility(fb ? android.view.View.GONE : android.view.View.VISIBLE);
-        pageFb.setVisibility(fb ? android.view.View.VISIBLE : android.view.View.GONE);
-        tabWa.setTextColor(fb ? 0xFF888888 : 0xFF4CAF50);
-        tabFb.setTextColor(fb ? 0xFF4CAF50 : 0xFF888888);
-        prefs.edit().putBoolean("page_fb", fb).apply();
+    private void showPage(int page) {
+        LinearLayout[] pages = {pageWa, pageFb, pageFo};
+        Button[] tabs = {tabWa, tabFb, tabFo};
+        for (int i = 0; i < 3; i++) {
+            pages[i].setVisibility(i == page ? android.view.View.VISIBLE : android.view.View.GONE);
+            tabs[i].setTextColor(i == page ? 0xFF4CAF50 : 0xFF888888);
+        }
+        prefs.edit().putInt("page", page).apply();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        showPage(prefs.getBoolean("page_fb", false));
+        showPage(prefs.getInt("page", 0));
         refresh();
     }
 
     private void refresh() {
+        if (forumInfo != null) {
+            String fp = prefs.getString("forum_pkg", "");
+            forumInfo.setText(fp.isEmpty() ? "Application Forum : pas encore détectée"
+                    : "Application Forum : " + fp);
+        }
         boolean on = MaskService.running;
         status.setText(on ? "✅ Service actif" : "❌ Service inactif");
         status.setTextColor(on ? 0xFF4CAF50 : 0xFFE53935);
