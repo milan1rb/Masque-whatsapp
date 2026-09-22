@@ -52,7 +52,8 @@ public class MaskService extends AccessibilityService {
     private static String lastLogMsg = "";
 
     private static final int COLOR_TEST = 0x88FF0000;
-    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3", "fb4", "fb5", "fb6", "fo1", "fo2", "fo3", "fo4", "fo5"};
+    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3", "fb4", "fb5", "fb6", "fo1", "fo2", "fo3", "fo4", "fo5", "ms1", "ms2", "ms3", "ms4"};
+    static final String DEFAULT_COLOR_MS = "#000000";
     static final String DEFAULT_COLOR_FO = "#242526";
     static final String MESSENGER = "com.facebook.orca";
     private static final String[] FORUM_GUESS = {"com.facebook.forum", "com.meta.forum", "com.facebook.groups"};
@@ -354,6 +355,10 @@ public class MaskService extends AccessibilityService {
         }
         if (isForum(pkg)) {
             handleForum(active, SystemClock.uptimeMillis());
+            return;
+        }
+        if (pkg.equals(MESSENGER)) {
+            handleMessenger(active, SystemClock.uptimeMillis());
             return;
         }
 
@@ -1055,6 +1060,13 @@ public class MaskService extends AccessibilityService {
 
     private int maskColor(String key) {
         if (prefs.getBoolean("debug", false)) return COLOR_TEST;
+        if (key.startsWith("ms")) {
+            try {
+                return Color.parseColor(prefs.getString("mscolor", DEFAULT_COLOR_MS).trim());
+            } catch (Exception e) {
+                return Color.BLACK;
+            }
+        }
         if (key.startsWith("fo")) {
             try {
                 return Color.parseColor(prefs.getString("focolor", DEFAULT_COLOR_FO).trim());
@@ -1485,6 +1497,90 @@ public class MaskService extends AccessibilityService {
         log("Impossible d'ouvrir les Enregistrements de Facebook");
     }
 
+    // ---------- Messenger : barre du bas à 4 cases ----------
+    // Cases 2, 3 et 4 masquées ; la 4e devient un bouton qui ramène sur Forum.
+
+    static final boolean[] MS_DEFAULT = {false, true, true, true};
+    private long msSeen = 0, msCheckTime = 0;
+    private boolean msEver = false, msBarCached = false;
+
+    private void handleMessenger(AccessibilityNodeInfo root, long now) {
+        inWhatsApp = false;
+        inFacebook = false;
+        phase = 0;
+        dimMasks = false;
+        if (!prefs.getBoolean("ms_enabled", true)) {
+            showMasks(new HashMap<>(), 0);
+            return;
+        }
+        metrics();
+        if (now - msCheckTime > 300) {
+            msCheckTime = now;
+            Rect slot = msRect(1);
+            List<Item> items = new ArrayList<>();
+            collect(root, 0, items, 1500);
+            List<Rect> found = new ArrayList<>();
+            for (Item it : items) {
+                if (it.visible && it.node.isClickable() && it.r.centerY() > slot.top
+                        && it.r.centerY() < slot.bottom && it.r.width() > W / 10 && it.r.width() < W / 3) {
+                    addTab(found, it.r);
+                }
+            }
+            msBarCached = found.size() >= 3;
+        }
+        if (msBarCached) {
+            msSeen = now;
+            msEver = true;
+        }
+        boolean show = !msEver || now - msSeen < 200;
+        Map<String, Rect> want = new HashMap<>();
+        if (show) {
+            for (int i = 1; i <= 4; i++) {
+                if (prefs.getBoolean("ms" + i, MS_DEFAULT[i - 1])) want.put("ms" + i, msRect(i));
+            }
+        }
+        showMasks(want, 0);
+        schedule(100);
+    }
+
+    private Rect msRect(int i) {
+        int nav = 0;
+        int id = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
+        if (id > 0) nav = getResources().getDimensionPixelSize(id);
+        int bottom = H - nav;
+        int top = bottom - dp(72);
+        int w = W / 4;
+        return new Rect((i - 1) * w, top, i * w, bottom);
+    }
+
+    private void openForum() {
+        String fp = prefs.getString("forum_pkg", "");
+        try {
+            Intent i = fp.isEmpty() ? null : getPackageManager().getLaunchIntentForPackage(fp);
+            if (i == null) {
+                log("Forum : application pas encore détectée (page Forum du menu)");
+                return;
+            }
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) {
+            log("Forum introuvable : " + e);
+        }
+    }
+
+    // Icône Forum : deux bulles de discussion, avec le libellé comme les autres onglets
+    private void drawForum(Canvas c, Rect g) {
+        iconStyle();
+        float cx = g.centerX(), cy = g.top + g.height() * 0.40f, r = dp(11);
+        c.drawRoundRect(cx - r * 1.4f, cy - r, cx + r * 0.6f, cy + r * 0.5f, r * 0.6f, r * 0.6f, iconPaint);
+        c.drawRoundRect(cx - r * 0.4f, cy - r * 0.2f, cx + r * 1.5f, cy + r * 1.2f, r * 0.6f, r * 0.6f, iconPaint);
+        Paint t = new Paint(Paint.ANTI_ALIAS_FLAG);
+        t.setColor(0xFFB0B3B8);
+        t.setTextSize(dp(15));
+        t.setTextAlign(Paint.Align.CENTER);
+        c.drawText("Forum", cx, g.top + g.height() * 0.86f, t);
+    }
+
     // ---------- Ajustement manuel des caches ----------
 
     private void showAdjuster() {
@@ -1765,6 +1861,7 @@ public class MaskService extends AccessibilityService {
                     c.drawRect(g.left, g.top, g.right, g.bottom, paint);
                     if (e.getKey().equals("fo5")) drawMessenger(c, g);
                     else if (e.getKey().equals("fo3")) drawBookmark(c, g);
+                    else if (e.getKey().equals("ms4")) drawForum(c, g);
                 }
             }
         }
@@ -1817,7 +1914,8 @@ public class MaskService extends AccessibilityService {
     private Rect maskRect(String key, Rect r) {
         boolean tab = key.equals("actus") || key.equals("commu")
                 || key.equals("disctxt") || key.equals("appelstxt");
-        int m = (key.startsWith("fb") || key.startsWith("fo")) ? 0 : prefs.getInt("margin", 8);   // marge permanente, réglable
+        int m = (key.startsWith("fb") || key.startsWith("fo") || key.startsWith("ms"))
+                ? 0 : prefs.getInt("margin", 8);   // marge permanente, réglable
         Rect g = tab ? new Rect(r.left - m, r.top + dp(1), r.right + m, r.bottom + m)
                      : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);
 
@@ -1968,6 +2066,7 @@ public class MaskService extends AccessibilityService {
                 v.setClickable(true);
                 if (key.equals("fo5")) v.setOnClickListener(x -> openMessenger());
                 else if (key.equals("fo3")) v.setOnClickListener(x -> openSaved());
+                else if (key.equals("ms4")) v.setOnClickListener(x -> openForum());
                 try { wm.addView(v, params(g)); slots.put(key, v); } catch (Exception ignored) { }
                 continue;
             }
