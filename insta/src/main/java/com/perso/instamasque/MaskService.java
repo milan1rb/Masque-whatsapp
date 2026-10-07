@@ -2,8 +2,11 @@ package com.perso.instamasque;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.accessibilityservice.GestureDescription;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -64,7 +67,11 @@ public class MaskService extends AccessibilityService {
     // Position de la barre d'Instagram et de ses onglets, mesurée puis retenue
     private final List<Rect> tabs = new ArrayList<>();
     private final List<AccessibilityNodeInfo> tabNodes = new ArrayList<>();
+    private final List<String> tabNames = new ArrayList<>();
     private int selectedTab = -1;
+    private int searchTab = -1;          // l'onglet Recherche, repéré par son nom
+    private long touchOffUntil = 0;      // le temps d'un appui à travers la barre
+    private String launcherPkg = "";
 
     private final Runnable tick = () -> {
         scheduled = false;
@@ -107,6 +114,12 @@ public class MaskService extends AccessibilityService {
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         metrics();
+        try {
+            ResolveInfo ri = getPackageManager().resolveActivity(
+                    new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+                    PackageManager.MATCH_DEFAULT_ONLY);
+            if (ri != null) launcherPkg = ri.activityInfo.packageName;
+        } catch (Exception ignored) { }
         running = true;
         instance = this;
         log("Service connecté (gestes autorisés : "
@@ -149,6 +162,11 @@ public class MaskService extends AccessibilityService {
         super.onDestroy();
     }
 
+    /** L'application traitée : Instagram, ou celle que tu as fait détecter. */
+    String target() {
+        return prefs.getString("pkg", INSTA);
+    }
+
     private void metrics() {
         DisplayMetrics dm = new DisplayMetrics();
         wm.getDefaultDisplay().getRealMetrics(dm);
@@ -163,7 +181,15 @@ public class MaskService extends AccessibilityService {
         if (root == null) return;
         String pkg = String.valueOf(root.getPackageName());
 
-        if (!pkg.equals(INSTA)) {
+        // Détection : la prochaine application ouverte devient celle que l'on traite
+        if (prefs.getBoolean("detect", false) && !pkg.equals(getPackageName())
+                && !pkg.equals(launcherPkg) && !pkg.equals("com.android.systemui")
+                && !pkg.equals("android")) {
+            prefs.edit().putString("pkg", pkg).putBoolean("detect", false).apply();
+            log("Application détectée : " + pkg);
+        }
+
+        if (!pkg.equals(target())) {
             if (!pkg.equals("com.android.systemui")) {
                 inInsta = false;
                 hideBar();
@@ -209,6 +235,7 @@ public class MaskService extends AccessibilityService {
         int bandTop = H - dp(130);
         List<Rect> found = new ArrayList<>();
         List<AccessibilityNodeInfo> nodes = new ArrayList<>();
+        List<String> names = new ArrayList<>();
         int sel = -1;
         for (Item it : items) {
             if (!it.visible || !it.node.isClickable()) continue;
@@ -223,6 +250,9 @@ public class MaskService extends AccessibilityService {
             if (dup) continue;
             found.add(new Rect(r));
             nodes.add(it.node);
+            String nm = it.desc.isEmpty() ? it.text : it.desc;
+            if (nm.isEmpty()) nm = it.id.contains("/") ? it.id.substring(it.id.indexOf('/') + 1) : "?";
+            names.add(nm);
         }
         // tri de gauche à droite
         for (int i = 0; i < found.size(); i++) {
@@ -230,6 +260,7 @@ public class MaskService extends AccessibilityService {
                 if (found.get(j).left < found.get(i).left) {
                     Rect tr = found.get(i); found.set(i, found.get(j)); found.set(j, tr);
                     AccessibilityNodeInfo tn = nodes.get(i); nodes.set(i, nodes.get(j)); nodes.set(j, tn);
+                    String ts = names.get(i); names.set(i, names.get(j)); names.set(j, ts);
                 }
             }
         }
@@ -245,10 +276,20 @@ public class MaskService extends AccessibilityService {
             tabs.addAll(found);
             tabNodes.clear();
             tabNodes.addAll(nodes);
+            tabNames.clear();
+            tabNames.addAll(names);
+            int srch = -1;
             for (int i = 0; i < nodes.size(); i++) {
                 if (nodes.get(i).isSelected()) sel = i;
+                String n = names.get(i).toLowerCase(Locale.ROOT);
+                if (n.contains("recherch") || n.contains("explor") || n.contains("search")) srch = i;
             }
             if (sel >= 0) selectedTab = sel;
+            if (srch >= 0 && srch != searchTab) {
+                searchTab = srch;
+                log("Onglet Recherche repéré : n°" + (srch + 1) + " « " + names.get(srch) + " »");
+            }
+            if (searchTab < 0) log("Onglets vus : " + names);
         }
 
         if (now - lastDumpTime > 10000) {
@@ -300,9 +341,9 @@ public class MaskService extends AccessibilityService {
     }
 
     private void openSearch() {
-        // la recherche est le 2e onglet de la vraie barre d'Instagram
-        int idx = Math.max(0, Math.min(tabNodes.size() - 1, prefs.getInt("search_index", 1)));
-        if (tabNodes.size() >= 4) {
+        int idx = searchIndex();
+        // 1. demander directement à l'onglet de s'ouvrir
+        if (idx >= 0 && idx < tabNodes.size()) {
             try {
                 AccessibilityNodeInfo n = tabNodes.get(idx);
                 n.refresh();
@@ -312,10 +353,65 @@ public class MaskService extends AccessibilityService {
                     log("Recherche ouverte (onglet " + (idx + 1) + ")");
                     return;
                 }
-            } catch (Exception ignored) { }
+                // 2. l'onglet refuse : on appuie vraiment dessus, à travers la barre
+                AccessibilityNodeInfo p = n.getParent();
+                for (int k = 0; k < 3 && p != null; k++) {
+                    if (p.isClickable() && p.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                        selectedTab = idx;
+                        log("Recherche ouverte (parent de l'onglet)");
+                        return;
+                    }
+                    p = p.getParent();
+                }
+                Rect r = new Rect();
+                n.getBoundsInScreen(r);
+                if (!r.isEmpty()) {
+                    tapThrough(r);
+                    selectedTab = idx;
+                    return;
+                }
+            } catch (Exception e) {
+                log("Recherche : " + e);
+            }
         }
-        if (open("instagram://explore")) return;
-        log("Recherche : la barre d'Instagram n'est pas visible, impossible d'y aller");
+        // 3. dernier recours : le lien interne
+        for (String u : new String[]{"instagram://explore", "instagram://search",
+                "https://www.instagram.com/explore/"}) {
+            if (open(u)) {
+                log("Recherche ouverte par " + u);
+                return;
+            }
+        }
+        log("Recherche : aucun onglet trouvé (" + tabNames + ")");
+    }
+
+    private int searchIndex() {
+        int forced = prefs.getInt("search_index", 0);
+        if (forced > 0 && forced <= tabNodes.size()) return forced - 1;   // choisi à la main
+        if (searchTab >= 0 && searchTab < tabNodes.size()) return searchTab;
+        return tabNodes.size() >= 4 ? 1 : -1;                             // 2e onglet par défaut
+    }
+
+    /** Efface un instant la barre pour qu'un vrai appui atteigne l'application. */
+    private void tapThrough(Rect r) {
+        touchOffUntil = SystemClock.uptimeMillis() + 900;
+        showBar(barRect());
+        final int cx = r.centerX(), cy = r.centerY();
+        handler.postDelayed(() -> {
+            try {
+                Path p = new Path();
+                p.moveTo(cx, cy);
+                boolean ok = dispatchGesture(new GestureDescription.Builder()
+                        .addStroke(new GestureDescription.StrokeDescription(p, 0, 60)).build(), null, null);
+                log("Recherche : appui simulé en " + cx + "," + cy + " (envoyé : " + ok + ")");
+            } catch (Exception e) {
+                log("Recherche : appui impossible, " + e);
+            }
+            handler.postDelayed(() -> {
+                touchOffUntil = 0;
+                schedule(16);
+            }, 500);
+        }, 120);
     }
 
     private void openDirect() {
@@ -343,7 +439,7 @@ public class MaskService extends AccessibilityService {
     private boolean open(String uri) {
         try {
             Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(uri));
-            i.setPackage(INSTA);
+            i.setPackage(target());
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(i);
             return true;
@@ -401,7 +497,7 @@ public class MaskService extends AccessibilityService {
             float half = bar.width() / 2f;
             int cy = bar.top + dp(34);
             drawSearch(c, (int) (bar.left + half / 2), cy,
-                    selectedTab == prefs.getInt("search_index", 1));
+                    selectedTab >= 0 && selectedTab == searchIndex());
             drawDirect(c, (int) (bar.left + half + half / 2), cy);
         }
     }
@@ -454,6 +550,16 @@ public class MaskService extends AccessibilityService {
         }
         canvas.set(r);
 
+        boolean paused = SystemClock.uptimeMillis() < touchOffUntil;
+        if (paused) {
+            if (touchView != null && touchView.getVisibility() == View.VISIBLE) {
+                touchView.setVisibility(View.INVISIBLE);
+                WindowManager.LayoutParams lp = (WindowManager.LayoutParams) touchView.getLayoutParams();
+                lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                try { wm.updateViewLayout(touchView, lp); } catch (Exception ignored) { }
+            }
+            return;
+        }
         if (touchView == null) {
             touchView = new View(this);
             touchView.setOnTouchListener((v, ev) -> {
@@ -472,6 +578,10 @@ public class MaskService extends AccessibilityService {
                 lp.y = r.top;
                 lp.width = r.width();
                 lp.height = r.height();
+                try { wm.updateViewLayout(touchView, lp); } catch (Exception ignored) { }
+            }
+            if ((lp.flags & WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) != 0) {
+                lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
                 try { wm.updateViewLayout(touchView, lp); } catch (Exception ignored) { }
             }
             if (touchView.getVisibility() != View.VISIBLE) touchView.setVisibility(View.VISIBLE);
@@ -631,7 +741,7 @@ public class MaskService extends AccessibilityService {
     }
 
     private String dump(List<Item> items) {
-        StringBuilder sb = new StringBuilder("Paquet : " + INSTA + "\n");
+        StringBuilder sb = new StringBuilder("Paquet : " + target() + "\n");
         for (Item it : items) {
             if (sb.length() > 40000) { sb.append("…(tronqué)"); break; }
             if (!it.visible) continue;
@@ -639,7 +749,7 @@ public class MaskService extends AccessibilityService {
             sb.append(it.cls);
             if (!it.text.isEmpty()) sb.append(" \"").append(it.text).append('"');
             if (!it.desc.isEmpty()) sb.append(" [").append(it.desc).append(']');
-            if (!it.id.isEmpty()) sb.append(" #").append(it.id.replace(INSTA + ":id/", ""));
+            if (!it.id.isEmpty()) sb.append(" #").append(it.id.replace(target() + ":id/", ""));
             sb.append(' ').append(it.r.toShortString());
             if (it.node.isClickable()) sb.append(" CLIC");
             if (it.node.isSelected()) sb.append(" SELECT");

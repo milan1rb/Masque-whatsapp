@@ -25,6 +25,7 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private TextView status;
     private TextView dumpView;
+    private TextView appInfo;
     private LinearLayout root;
 
     @Override
@@ -48,6 +49,23 @@ public class MainActivity extends Activity {
         button("Ouvrir les réglages d'accessibilité",
                 v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
 
+        title("Application visée");
+        help("Par défaut l'application Instagram officielle. Si tu utilises une autre version "
+                + "(clone, application dupliquée, version modifiée), touche Détecter puis ouvre-la : "
+                + "elle sera retenue.");
+        appInfo = new TextView(this);
+        appInfo.setPadding(0, 0, 0, dp(6));
+        root.addView(appInfo);
+        button("Détecter l'application", v -> {
+            prefs.edit().putBoolean("detect", true).apply();
+            toast("Ouvre maintenant l'application à traiter");
+        });
+        button("Revenir à Instagram", v -> {
+            prefs.edit().remove("pkg").apply();
+            refreshApp();
+            toast("Instagram officiel");
+        });
+
         title("Barre du bas");
         help("La vraie barre d'Instagram est recouverte. Deux boutons la remplacent : "
                 + "Rechercher à gauche, Messages à droite. Elle reste affichée dans la recherche, "
@@ -55,6 +73,7 @@ public class MainActivity extends Activity {
         check("enabled", "Activer sur Instagram", true);
         check("divider", "Trait de séparation en haut", true);
         number("bar_pad", 10, 0, 60, "Hauteur sous les icônes, en pixels");
+        number("search_index", 0, 0, 8, "Numéro de l'onglet Recherche (0 = trouvé tout seul)");
 
         title("Couleurs");
         hex("color", MaskService.DEFAULT_COLOR, "Fond de la barre");
@@ -83,16 +102,24 @@ public class MainActivity extends Activity {
         root.addView(dumpView);
     }
 
+    private void refreshApp() {
+        if (appInfo == null) return;
+        String p = prefs.getString("pkg", "com.instagram.android");
+        appInfo.setText("Application traitée : " + p);
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
+        refreshApp();
         boolean on = MaskService.running;
         status.setText(on ? "✅ Service actif" : "❌ Service inactif");
         status.setTextColor(on ? 0xFF4CAF50 : 0xFFE53935);
     }
 
     private void openInsta() {
-        Intent i = getPackageManager().getLaunchIntentForPackage("com.instagram.android");
+        Intent i = getPackageManager().getLaunchIntentForPackage(
+                prefs.getString("pkg", "com.instagram.android"));
         if (i == null) {
             toast("Instagram introuvable");
             return;
