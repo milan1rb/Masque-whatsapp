@@ -53,10 +53,12 @@ public class MaskService extends AccessibilityService {
     private static String lastLogMsg = "";
 
     private static final int COLOR_TEST = 0x88FF0000;
-    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3", "fb4", "fb5", "fb6", "fo1", "fo2", "fo3", "fo4", "fo5", "ms1", "ms2", "ms3", "ms4", "ms5", "ms6", "fobar", "msbar", "fbsvback", "fbsvforum"};
+    private static final String[] KEYS = {"title", "cam", "metaai", "actus", "commu", "disctxt", "appelstxt", "fb1", "fb2", "fb3", "fb4", "fb5", "fb6", "fo1", "fo2", "fo3", "fo4", "fo5", "ms1", "ms2", "ms3", "ms4", "ms5", "ms6", "fobar", "msbar", "fbsvback", "fbsvforum", "ig1"};
     static final String DEFAULT_COLOR_MS = "#000000";
     static final String DEFAULT_COLOR_FO = "#242526";
     static final String MESSENGER = "com.facebook.orca";
+    static final String INSTA = "com.instagram.android";
+    static final String DEFAULT_COLOR_IG = "#000000";
     private static final String[] FORUM_GUESS = {"com.facebook.ember", "com.facebook.forum", "com.meta.forum"};
     static final String FB = "com.facebook.katana";
     static final String DEFAULT_COLOR_FB = "#FFFFFF";
@@ -352,7 +354,8 @@ public class MaskService extends AccessibilityService {
         }
         if (prefs.getBoolean("forum_detect", false) && !pkg.equals(getPackageName())
                 && !pkg.equals(launcherPkg) && !pkg.equals("com.android.systemui")
-                && !isWa(pkg) && !pkg.equals(FB) && !pkg.equals(MESSENGER)) {
+                && !isWa(pkg) && !pkg.equals(FB) && !pkg.equals(MESSENGER)
+                && !pkg.equals(INSTA)) {
             prefs.edit().putString("forum_pkg", pkg).putBoolean("forum_detect", false).apply();
             log("Forum détecté : " + pkg);
         }
@@ -362,6 +365,10 @@ public class MaskService extends AccessibilityService {
         }
         if (pkg.equals(MESSENGER)) {
             handleMessenger(active, SystemClock.uptimeMillis());
+            return;
+        }
+        if (pkg.equals(INSTA)) {
+            handleInstagram(active, SystemClock.uptimeMillis());
             return;
         }
 
@@ -1066,6 +1073,13 @@ public class MaskService extends AccessibilityService {
         String own = prefs.getString("col:" + key, "");
         if (!own.isEmpty() && !dimMasks) {
             try { return Color.parseColor(own); } catch (Exception ignored) { }
+        }
+        if (key.startsWith("ig")) {
+            try {
+                return Color.parseColor(prefs.getString("igcolor", DEFAULT_COLOR_IG).trim());
+            } catch (Exception e) {
+                return Color.BLACK;
+            }
         }
         if (key.startsWith("fbsv") || (savedPage && key.startsWith("fb"))) {
             try {
@@ -1958,6 +1972,66 @@ public class MaskService extends AccessibilityService {
         c.drawText("Forum", cx, g.top + g.height() * 0.86f, t);
     }
 
+    // ---------- Instagram : section « Suggestions » de l'écran Notifications ----------
+    // Le cache part du titre « Suggestions » et descend jusqu'à la barre du bas.
+
+    private long igCheck = 0;
+    private Rect igSugg = null;
+    private boolean igLogged = false;
+
+    private void handleInstagram(AccessibilityNodeInfo root, long now) {
+        adjusterTick();
+        inWhatsApp = false;
+        inFacebook = false;
+        phase = 0;
+        dimMasks = false;
+        if (!prefs.getBoolean("ig_enabled", true)) {
+            showMasks(new HashMap<>(), 0);
+            return;
+        }
+        metrics();
+        if (now - igCheck > 250) {
+            igCheck = now;
+            igSugg = null;
+            // l'écran Notifications : son titre est en haut de l'écran
+            boolean notifs = false;
+            for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByText("Notifications")) {
+                if (n.isVisibleToUser() && bounds(n).centerY() < H * 0.12) notifs = true;
+            }
+            if (notifs) {
+                for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByText("Suggestions")) {
+                    Rect r = bounds(n);
+                    if (!n.isVisibleToUser() || r.isEmpty()) continue;
+                    if (r.left > W * 0.5 || r.width() > W * 0.7) continue;   // le titre de section
+                    if (igSugg == null || r.top < igSugg.top) igSugg = new Rect(r);
+                }
+                if (igSugg == null && !igLogged) {
+                    igLogged = true;
+                    List<Item> items = new ArrayList<>();
+                    collect(root, 0, items, 1200);
+                    lastDump = dump(items, INSTA);
+                    log("Instagram : « Suggestions » pas trouvé (envoie-moi le diagnostic)");
+                }
+            }
+        }
+        Map<String, Rect> want = new HashMap<>();
+        if (igSugg != null) {
+            int top = Math.max((int) (H * 0.10), igSugg.top - dp(12));   // jamais sur la barre du haut
+            int bottom = igBarTop();                                      // jusqu'à la barre du bas
+            if (bottom > top + dp(20)) want.put("ig1", new Rect(0, top, W, bottom));
+        }
+        showMasks(want, 0);
+        schedule(120);
+    }
+
+    // Haut de la barre de navigation d'Instagram, mesuré sur ses onglets
+    private int igBarTop() {
+        int nav = 0;
+        int id = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
+        if (id > 0) nav = getResources().getDimensionPixelSize(id);
+        return H - nav - dp(56);
+    }
+
     // ---------- Personnalisation à la main de chaque bloc (toutes les applications) ----------
     // Panneau flottant : choix du bloc affiché, position, taille, forme et couleur.
 
@@ -2131,6 +2205,7 @@ public class MaskService extends AccessibilityService {
             case "ms6": return "Messenger · bouton Meta AI";
             case "fbsvback": return "Enregistrements · flèche";
             case "fbsvforum": return "Enregistrements · raccourci Forum";
+            case "ig1": return "Instagram · Suggestions";
             default:
                 if (key.startsWith("fb")) return "Facebook · case " + key.substring(2);
                 if (key.startsWith("fo")) return "Forum · case " + key.substring(2);
@@ -2423,7 +2498,8 @@ public class MaskService extends AccessibilityService {
     private Rect maskRect(String key, Rect r) {
         boolean tab = key.equals("actus") || key.equals("commu")
                 || key.equals("disctxt") || key.equals("appelstxt");
-        int m = (key.startsWith("fb") || key.startsWith("fo") || key.startsWith("ms"))
+        int m = (key.startsWith("fb") || key.startsWith("fo") || key.startsWith("ms")
+                || key.startsWith("ig"))
                 ? 0 : prefs.getInt("margin", 8);   // marge permanente, réglable
         Rect g = tab ? new Rect(r.left - m, r.top + dp(1), r.right + m, r.bottom + m)
                      : new Rect(r.left - m, r.top - m, r.right + m, r.bottom + m);

@@ -29,8 +29,8 @@ public class MainActivity extends Activity {
     private TextView forumInfo;
     private LinearLayout root;
     private LinearLayout cur;
-    private LinearLayout pageWa, pageFb, pageFo, pageMs;
-    private Button tabWa, tabFb, tabFo, tabMs;
+    private LinearLayout pageWa, pageFb, pageFo, pageMs, pageIg;
+    private Button tabWa, tabFb, tabFo, tabMs, tabIg;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -77,7 +77,10 @@ public class MainActivity extends Activity {
         tabMs = new Button(this);
         tabMs.setText("Messenger");
         apps.addView(tabMs, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        for (Button b : new Button[]{tabWa, tabFb, tabFo, tabMs}) {
+        tabIg = new Button(this);
+        tabIg.setText("Instagram");
+        apps.addView(tabIg, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        for (Button b : new Button[]{tabWa, tabFb, tabFo, tabMs, tabIg}) {
             b.setTextSize(11);
             b.setAllCaps(false);
         }
@@ -95,6 +98,10 @@ public class MainActivity extends Activity {
         pageMs.setOrientation(LinearLayout.VERTICAL);
         root.addView(pageMs);
         tabMs.setOnClickListener(v -> showPage(3));
+        pageIg = new LinearLayout(this);
+        pageIg.setOrientation(LinearLayout.VERTICAL);
+        root.addView(pageIg);
+        tabIg.setOnClickListener(v -> showPage(4));
         tabWa.setOnClickListener(v -> showPage(0));
         tabFb.setOnClickListener(v -> showPage(1));
         tabFo.setOnClickListener(v -> showPage(2));
@@ -260,6 +267,15 @@ public class MainActivity extends Activity {
         hex("mscolor", MaskService.DEFAULT_COLOR_MS, "Couleur de la barre de Messenger");
         button("Personnaliser les blocs dans Messenger", v -> openApp("com.facebook.orca", "adjust"));
 
+        // ---------- Page Instagram ----------
+        cur = pageIg;
+        title("Instagram");
+        help("Masque la section « Suggestions » en bas de l'écran Notifications.");
+        check("ig_enabled", "Activer sur Instagram", true);
+        hex("igcolor", MaskService.DEFAULT_COLOR_IG, "Couleur du cache");
+        button("Personnaliser le bloc dans Instagram",
+                v -> openApp("com.instagram.android", "adjust"));
+
         // ---------- Diagnostic (commun) ----------
         cur = root;
         title("Personnalisation");
@@ -289,9 +305,9 @@ public class MainActivity extends Activity {
     }
 
     private void showPage(int page) {
-        LinearLayout[] pages = {pageWa, pageFb, pageFo, pageMs};
-        Button[] tabs = {tabWa, tabFb, tabFo, tabMs};
-        for (int i = 0; i < 4; i++) {
+        LinearLayout[] pages = {pageWa, pageFb, pageFo, pageMs, pageIg};
+        Button[] tabs = {tabWa, tabFb, tabFo, tabMs, tabIg};
+        for (int i = 0; i < 5; i++) {
             pages[i].setVisibility(i == page ? android.view.View.VISIBLE : android.view.View.GONE);
             tabs[i].setTextColor(i == page ? 0xFF4CAF50 : 0xFF888888);
         }
