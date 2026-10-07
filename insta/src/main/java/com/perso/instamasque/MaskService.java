@@ -50,6 +50,7 @@ public class MaskService extends AccessibilityService {
     private static volatile String lastDump = "(Instagram pas encore analysé)";
     private static final StringBuilder LOG = new StringBuilder();
     private static String lastLogMsg = "";
+    private static long lastLogTime = 0;
 
     private WindowManager wm;
     private SharedPreferences prefs;
@@ -98,8 +99,12 @@ public class MaskService extends AccessibilityService {
     // ---------- Journal ----------
 
     static synchronized void log(String msg) {
-        if (msg.equals(lastLogMsg)) return;
+        long now = SystemClock.uptimeMillis();
+        // on ne masque un message répété que s'il revient dans la seconde :
+        // deux appuis identiques doivent rester visibles dans le journal
+        if (msg.equals(lastLogMsg) && now - lastLogTime < 1200) return;
         lastLogMsg = msg;
+        lastLogTime = now;
         String t = new SimpleDateFormat("HH:mm:ss", Locale.FRANCE).format(new Date());
         LOG.append(t).append("  ").append(msg).append('\n');
         if (LOG.length() > 6000) LOG.delete(0, LOG.length() - 6000);
@@ -364,6 +369,45 @@ public class MaskService extends AccessibilityService {
         return new Rect(0, top + o[1], W, Math.min(H, bottom) + o[3]);
     }
 
+    // ---------- Position et taille des deux boutons ----------
+
+    /** Le centre d'un bouton, en pixels depuis le bord gauche. */
+    private int btnX(boolean left) {
+        int v = prefs.getInt(left ? "bg_x" : "bd_x", -1);
+        if (v < 0) v = left ? W / 4 : 3 * W / 4;
+        return Math.max(0, Math.min(W, v));
+    }
+
+    /** La taille du dessin de l'icône, en dp. */
+    private int btnSize(boolean left) {
+        return Math.max(4, prefs.getInt(left ? "bg_size" : "bd_size", left ? 13 : 11));
+    }
+
+    /** La largeur de la zone qui répond à l'appui, en pixels. */
+    private int btnZone(boolean left) {
+        int v = prefs.getInt(left ? "bg_w" : "bd_w", 0);
+        if (v <= 0) v = Math.max(56, btnSize(left) * 3);
+        return dp(v);
+    }
+
+    private Rect btnRect(boolean left) {
+        Rect bar = barRect();
+        int w = btnZone(left) / 2;
+        int cx = btnX(left);
+        return new Rect(cx - w, bar.top, cx + w, bar.bottom);
+    }
+
+    /** Le point exact où la macro appuie pour ouvrir la barre « Rechercher ». */
+    private int macroX() {
+        int v = prefs.getInt("macro_x", -1);
+        return v < 0 ? W / 2 : Math.max(0, Math.min(W, v));
+    }
+
+    private int macroY() {
+        int v = prefs.getInt("macro_y", -1);
+        return v < 0 ? dp(50) : Math.max(0, Math.min(H, v));
+    }
+
     /**
      * Le cache du haut de la page Récent : la flèche de retour, la barre
      * « Rechercher » et la ligne « Récent / Voir tout ».
@@ -378,7 +422,8 @@ public class MaskService extends AccessibilityService {
     /** Le cache de la colonne de croix, à droite de la liste. */
     private Rect maskRightRect() {
         int w = dp(prefs.getInt("m_right", 58));
-        int top = dp(prefs.getInt("m_bottom", 115));
+        int rt = prefs.getInt("m_rtop", -1);
+        int top = dp(rt < 0 ? prefs.getInt("m_bottom", 115) : rt);
         int bottom = barRect().top;
         if (w <= 0 || bottom <= top) return new Rect();
         return new Rect(W - w, top, W, bottom);
@@ -421,9 +466,20 @@ public class MaskService extends AccessibilityService {
 
     // ---------- Les deux boutons ----------
 
-    /** Appui sur la fausse barre : moitié gauche = Rechercher, droite = Messages. */
-    private void barTap(float x) {
-        if (x < W / 2f) openDirect(); else openSearch();
+    /**
+     * Appui sur la fausse barre. Chaque bouton a sa propre zone, réglable :
+     * en dehors de ces deux zones, l'appui est avalé sans rien déclencher.
+     */
+    private void barTap(float fx, float fy) {
+        int x = (int) fx, y = (int) fy;
+        Rect g = btnRect(true), d = btnRect(false);
+        boolean left = g.contains(x, y);
+        boolean right = d.contains(x, y);
+        log("Appui barre en " + x + "," + y + " — Messages " + g.toShortString()
+                + " Recherche " + d.toShortString() + " → "
+                + (left ? "Messages" : right ? "Recherche" : "aucun bouton"));
+        if (left) openDirect();
+        else if (right) openSearch();
     }
 
     private void openSearch() {
@@ -432,7 +488,15 @@ public class MaskService extends AccessibilityService {
 
     private void openSearch(boolean mayGoBack) {
         int idx = searchIndex();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < tabNames.size() && i < tabs.size(); i++) {
+            sb.append(i + 1).append('=').append(tabNames.get(i))
+              .append(tabs.get(i).toShortString()).append("  ");
+        }
+        log("Recherche : indice retenu " + (idx + 1) + " sur " + tabNodes.size()
+                + " onglets — " + (sb.length() == 0 ? "(aucun onglet mémorisé)" : sb));
         AccessibilityNodeInfo n = freshTab(idx);
+        if (n == null) log("Recherche : l'onglet mémorisé n'est pas affiché ici");
 
         // 1. l'onglet est bien là, sous les yeux : on lui demande de s'ouvrir
         if (n != null) {
@@ -540,60 +604,76 @@ public class MaskService extends AccessibilityService {
      * Deuxième temps de la macro : appuyer sur la barre « Rechercher » en haut
      * de l'écran. C'est elle qui fait apparaître la liste des comptes récents.
      */
-    private void tapField() {
-        AccessibilityNodeInfo root = getRootInActiveWindow();
-        Rect box = null;
-        boolean ok = false;
-        if (root != null) {
-            List<Item> items = new ArrayList<>();
-            collect(root, 0, items, 1200);
-            for (Item it : items) {
-                if (!it.visible || it.r.isEmpty()) continue;
-                if (it.r.centerY() > H * 0.2) continue;          // seulement tout en haut
-                if (it.r.width() < W / 2) continue;              // le champ est très large
-                if (it.r.height() > dp(90)) continue;
-                String s = (it.text + " " + it.desc + " " + it.id).toLowerCase(Locale.ROOT);
-                boolean named = s.contains("recherch") || s.contains("search");
-                if (!it.node.isEditable() && !named) continue;
-                box = new Rect(it.r);
-                AccessibilityNodeInfo c = clickable(it.node);
-                try {
-                    if (c != null && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) ok = true;
-                    else if (it.node.isEditable()
-                            && it.node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) ok = true;
-                } catch (Exception ignored) { }
-                if (ok) {
-                    log("Barre Rechercher touchée " + box.toShortString());
-                    break;
+    void tapField() {
+        int cx = macroX(), cy = macroY();
+
+        // Option : laisser l'app chercher le champ toute seule. Désactivée par
+        // défaut, car un champ mal reconnu fait partir l'appui n'importe où.
+        if (prefs.getBoolean("macro_nodes", false)) {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null) {
+                List<Item> items = new ArrayList<>();
+                collect(root, 0, items, 1200);
+                for (Item it : items) {
+                    if (!it.visible || it.r.isEmpty()) continue;
+                    if (!it.r.contains(cx, cy)) continue;        // il doit couvrir la cible
+                    if (it.r.height() > dp(90)) continue;
+                    String s = (it.text + " " + it.desc + " " + it.id).toLowerCase(Locale.ROOT);
+                    if (!it.node.isEditable() && !s.contains("recherch") && !s.contains("search")) {
+                        continue;
+                    }
+                    AccessibilityNodeInfo c = clickable(it.node);
+                    try {
+                        if (c != null && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                            log("Barre Rechercher ouverte par son élément " + it.r.toShortString());
+                            swipeDown();
+                            return;
+                        }
+                    } catch (Exception ignored) { }
                 }
+                log("Barre Rechercher : aucun élément sur la cible, appui direct");
             }
         }
-        if (!ok) {   // personne n'a accepté le clic : un vrai appui, au bon endroit
-            int cx = box == null ? W / 2 : box.centerX();
-            int cy = box == null ? dp(52) : box.centerY();
-            maskOffUntil = SystemClock.uptimeMillis() + 700;
-            blockTop = blocker(blockTop, new Rect());
-            try {
-                Path p = new Path();
-                p.moveTo(cx, cy);
-                boolean sent = dispatchGesture(new GestureDescription.Builder()
-                        .addStroke(new GestureDescription.StrokeDescription(p, 0, 60)).build(),
-                        null, null);
-                log("Barre Rechercher : appui simulé en " + cx + "," + cy + " (envoyé : " + sent + ")");
-            } catch (Exception e) {
-                log("Barre Rechercher : " + e);
-            }
-        }
+
+        // les caches laissent passer le temps de l'appui
+        maskOffUntil = SystemClock.uptimeMillis() + 700;
+        blockTop = blocker(blockTop, new Rect());
+        Path p = new Path();
+        p.moveTo(cx, cy);
+        tap(p, 60, "barre Rechercher en " + cx + "," + cy);
         swipeDown();
+    }
+
+    /** Envoie un geste, sauf si les appuis simulés sont coupés dans les réglages. */
+    private boolean tap(Path p, int ms, String what) {
+        if (!prefs.getBoolean("gestures", true)) {
+            log("Appui simulé coupé dans les réglages : " + what);
+            return false;
+        }
+        try {
+            boolean sent = dispatchGesture(new GestureDescription.Builder()
+                    .addStroke(new GestureDescription.StrokeDescription(p, 0, ms)).build(),
+                    null, null);
+            log("Appui simulé : " + what + " (envoyé : " + sent + ")");
+            return sent;
+        } catch (Exception e) {
+            log("Appui simulé impossible : " + what + " — " + e);
+            return false;
+        }
     }
 
     /** Troisième temps : le petit glissement vers le bas, qui referme le clavier. */
     private void swipeDown() {
         int delay = prefs.getInt("swipe_delay", 450);
         handler.postDelayed(() -> {
+            if (!prefs.getBoolean("gestures", true)) {
+                log("Glissement coupé dans les réglages");
+                return;
+            }
             int dist = dp(prefs.getInt("swipe_dist", 55));
-            int x = W / 2;
-            int y0 = (int) (H * 0.32);
+            int x = prefs.getInt("swipe_x", -1) < 0 ? W / 2 : prefs.getInt("swipe_x", W / 2);
+            int y0 = prefs.getInt("swipe_y", -1) < 0 ? (int) (H * 0.32)
+                    : prefs.getInt("swipe_y", 0);
             try {
                 Path move = new Path();
                 move.moveTo(x, y0);
@@ -614,7 +694,8 @@ public class MaskService extends AccessibilityService {
                                 log("Glissement annulé par Android");
                             }
                         }, null);
-                log("Comptes récents : glissement de " + dist + " px (envoyé : " + ok + ")");
+                log("Glissement depuis " + x + "," + y0 + " sur " + dist
+                        + " px (envoyé : " + ok + ")");
             } catch (Exception e) {
                 log("Comptes récents : " + e);
             }
@@ -627,16 +708,9 @@ public class MaskService extends AccessibilityService {
         showBar(barRect());
         final int cx = r.centerX(), cy = r.centerY();
         handler.postDelayed(() -> {
-            try {
-                Path p = new Path();
-                p.moveTo(cx, cy);
-                boolean ok = dispatchGesture(new GestureDescription.Builder()
-                        .addStroke(new GestureDescription.StrokeDescription(p, 0, 60)).build(), null, null);
-                log("Recherche : appui simulé en " + cx + "," + cy + " (envoyé : " + ok + ")");
-                if (ok) revealRecent();
-            } catch (Exception e) {
-                log("Recherche : appui impossible, " + e);
-            }
+            Path p = new Path();
+            p.moveTo(cx, cy);
+            if (tap(p, 60, "onglet Recherche en " + cx + "," + cy)) revealRecent();
             handler.postDelayed(() -> {
                 touchOffUntil = 0;
                 schedule(16);
@@ -728,6 +802,8 @@ public class MaskService extends AccessibilityService {
             if (!mt.isEmpty()) c.drawRect(mt.left, mt.top, mt.right, mt.bottom, p);
             if (!mr.isEmpty()) c.drawRect(mr.left, mr.top, mr.right, mr.bottom, p);
 
+            if (prefs.getBoolean("adjust", false)) guides(c);
+
             if (bar.isEmpty()) return;
             p.setStyle(Paint.Style.FILL);
             p.setColor(barColor());
@@ -738,11 +814,42 @@ public class MaskService extends AccessibilityService {
                 c.drawRect(bar.left, bar.top, bar.right, bar.top + Math.max(1, dp(1) / 2), p);
             }
 
-            float half = bar.width() / 2f;
             int cy = bar.centerY();
-            drawDirect(c, (int) (bar.left + half / 2), cy);
-            drawSearch(c, (int) (bar.left + half + half / 2), cy,
+            drawDirect(c, btnX(true), cy, dp(btnSize(true)));
+            drawSearch(c, btnX(false), cy, dp(btnSize(false)),
                     selectedTab >= 0 && selectedTab == searchIndex());
+        }
+
+        /** En mode réglage : les contours des zones et la cible de la macro. */
+        private void guides(Canvas c) {
+            Paint q = new Paint(Paint.ANTI_ALIAS_FLAG);
+            q.setStyle(Paint.Style.STROKE);
+            q.setStrokeWidth(Math.max(2, dp(1)));
+
+            q.setColor(0xFF00E5FF);                       // les deux boutons
+            for (boolean l : new boolean[]{true, false}) {
+                Rect b = btnRect(l);
+                c.drawRect(b.left, b.top, b.right, b.bottom, q);
+            }
+            q.setColor(0xFF76FF03);                       // les deux caches
+            Rect t = maskTopRect(), r = maskRightRect();
+            if (!t.isEmpty()) c.drawRect(t.left + 1, t.top, t.right - 1, t.bottom, q);
+            if (!r.isEmpty()) c.drawRect(r.left, r.top, r.right - 1, r.bottom, q);
+
+            q.setColor(0xFFFF4081);                       // la cible de la macro
+            int mx = macroX(), my = macroY();
+            c.drawCircle(mx, my, dp(10), q);
+            c.drawLine(mx - dp(18), my, mx + dp(18), my, q);
+            c.drawLine(mx, my - dp(18), mx, my + dp(18), q);
+
+            q.setColor(0xFFFFC107);                       // le départ du glissement
+            int sx = prefs.getInt("swipe_x", -1) < 0 ? W / 2 : prefs.getInt("swipe_x", W / 2);
+            int sy = prefs.getInt("swipe_y", -1) < 0 ? (int) (H * 0.32) : prefs.getInt("swipe_y", 0);
+            int d = dp(prefs.getInt("swipe_dist", 55));
+            c.drawCircle(sx, sy, dp(8), q);
+            c.drawLine(sx, sy, sx, sy + d, q);
+            c.drawLine(sx - dp(7), sy + d - dp(7), sx, sy + d, q);
+            c.drawLine(sx + dp(7), sy + d - dp(7), sx, sy + d, q);
         }
     }
 
@@ -755,20 +862,20 @@ public class MaskService extends AccessibilityService {
     }
 
     /** Loupe, comme l'icône Rechercher d'Instagram. */
-    private void drawSearch(Canvas c, int cx, int cy, boolean active) {
+    private void drawSearch(Canvas c, int cx, int cy, int size, boolean active) {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         stroke(p);
         if (active) p.setStrokeWidth(dp(3));
-        float r = dp(11);
+        float r = size;
         c.drawCircle(cx - r * 0.18f, cy - r * 0.18f, r, p);
         c.drawLine(cx + r * 0.55f, cy + r * 0.55f, cx + r * 1.25f, cy + r * 1.25f, p);
     }
 
     /** Avion en papier, comme l'icône Messages d'Instagram. */
-    private void drawDirect(Canvas c, int cx, int cy) {
+    private void drawDirect(Canvas c, int cx, int cy, int size) {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         stroke(p);
-        float s = dp(13);
+        float s = size;
         Path tri = new Path();
         tri.moveTo(cx - s, cy - s * 0.25f);
         tri.lineTo(cx + s, cy - s);
@@ -875,7 +982,12 @@ public class MaskService extends AccessibilityService {
                 if (ev.getAction() == MotionEvent.ACTION_UP) {
                     Rect b = barRect();
                     // on n'agit que si l'appui est bien tombé dans la barre
-                    if (ev.getRawY() >= b.top && ev.getRawY() <= b.bottom) barTap(ev.getRawX());
+                    if (ev.getRawY() >= b.top && ev.getRawY() <= b.bottom) {
+                        barTap(ev.getRawX(), ev.getRawY());
+                    } else {
+                        log("Appui hors de la barre ignoré : " + (int) ev.getRawX()
+                                + "," + (int) ev.getRawY() + " barre " + b.toShortString());
+                    }
                 }
                 return true;
             });
@@ -935,54 +1047,199 @@ public class MaskService extends AccessibilityService {
 
     // ---------- Réglage à la main ----------
 
+    private static final String[] MODES = {
+            "Barre", "Bouton Messages", "Bouton Recherche",
+            "Cache du haut", "Cache des croix", "Cible de la macro", "Glissement"};
+    private int mode = 0;
+    private int panelPos = 2;            // 0 haut, 1 milieu haut, 2 milieu bas, 3 bas
+
     private void showAdjuster() {
         if (adjuster != null) return;
         android.widget.LinearLayout box = new android.widget.LinearLayout(this);
         box.setOrientation(android.widget.LinearLayout.VERTICAL);
-        box.setBackgroundColor(0xEE1C1C1C);
-        box.setPadding(dp(6), dp(6), dp(6), dp(6));
+        box.setBackgroundColor(0xF21C1C1C);
+        box.setPadding(dp(6), dp(4), dp(6), dp(4));
 
         final android.widget.TextView label = new android.widget.TextView(this);
         label.setTextColor(0xFFFFFFFF);
-        label.setTextSize(12);
+        label.setTextSize(11);
         box.addView(label);
-        final Runnable refresh = () -> {
-            Rect r = barRect();
-            label.setText("Barre : " + r.toShortString()
-                    + "   couleur " + String.format("#%06X", barColor() & 0xFFFFFF));
+
+        final Runnable[] refresh = new Runnable[1];
+        refresh[0] = () -> {
+            label.setText("▸ " + MODES[mode] + "\n" + values());
             if (canvas != null) canvas.invalidate();
+            showBar(barRect());
         };
 
-        box.addView(row(new String[]{"↑", "↓", "haut +", "haut −"}, new Runnable[]{
-                () -> { nudge(0, -3, 0, -3); refresh.run(); },
-                () -> { nudge(0, 3, 0, 3); refresh.run(); },
-                () -> { nudge(0, -3, 0, 0); refresh.run(); },
-                () -> { nudge(0, 3, 0, 0); refresh.run(); }}));
-        box.addView(row(new String[]{"Plus clair", "Plus foncé", "Réinit."}, new Runnable[]{
-                () -> { tint(2); refresh.run(); },
-                () -> { tint(-2); refresh.run(); },
+        box.addView(row(new String[]{"Barre", "Messages", "Recherche"}, new Runnable[]{
+                () -> { mode = 0; refresh[0].run(); },
+                () -> { mode = 1; refresh[0].run(); },
+                () -> { mode = 2; refresh[0].run(); }}));
+        box.addView(row(new String[]{"Cache haut", "Cache croix", "Cible", "Glisse"},
+                new Runnable[]{
+                () -> { mode = 3; refresh[0].run(); },
+                () -> { mode = 4; refresh[0].run(); },
+                () -> { mode = 5; refresh[0].run(); },
+                () -> { mode = 6; refresh[0].run(); }}));
+        box.addView(row(new String[]{"←", "→", "↑", "↓", "−", "+"}, new Runnable[]{
+                () -> { move(-1, 0); refresh[0].run(); },
+                () -> { move(1, 0); refresh[0].run(); },
+                () -> { move(0, -1); refresh[0].run(); },
+                () -> { move(0, 1); refresh[0].run(); },
+                () -> { resize(-1); refresh[0].run(); },
+                () -> { resize(1); refresh[0].run(); }}));
+        box.addView(row(new String[]{"←←", "→→", "↑↑", "↓↓", "−−", "++"}, new Runnable[]{
+                () -> { move(-6, 0); refresh[0].run(); },
+                () -> { move(6, 0); refresh[0].run(); },
+                () -> { move(0, -6); refresh[0].run(); },
+                () -> { move(0, 6); refresh[0].run(); },
+                () -> { resize(-6); refresh[0].run(); },
+                () -> { resize(6); refresh[0].run(); }}));
+        box.addView(row(new String[]{"Tester l'appui", "Tester la macro", "Panneau ↕"},
+                new Runnable[]{
+                () -> { log("— test de l'appui demandé —"); tapOnce(); },
+                () -> { log("— test de la macro demandé —"); tapField(); },
+                () -> { panelPos = (panelPos + 1) % 4; placeAdjuster(); }}));
+        box.addView(row(new String[]{"Plus clair", "Plus foncé", "Terminé"}, new Runnable[]{
+                () -> { tint(2); refresh[0].run(); },
+                () -> { tint(-2); refresh[0].run(); },
                 () -> {
-                    prefs.edit().remove("adj").remove("color").apply();
-                    refresh.run();
+                    prefs.edit().putBoolean("adjust", false).apply();
+                    hideAdjuster();
+                    if (canvas != null) canvas.invalidate();
                 }}));
-        android.widget.Button done = new android.widget.Button(this);
-        done.setText("Terminé");
-        done.setOnClickListener(v -> {
-            prefs.edit().putBoolean("adjust", false).apply();
-            hideAdjuster();
-        });
-        box.addView(done);
-        refresh.run();
+        refresh[0].run();
 
-        WindowManager.LayoutParams lp = params(0, (int) (H * 0.3),
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.WRAP_CONTENT, 0);
         try {
-            wm.addView(box, lp);
+            wm.addView(box, params(0, panelY(), WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT, 0));
             adjuster = box;
         } catch (Exception e) {
             log("Réglage impossible : " + e);
         }
+    }
+
+    private int panelY() {
+        return (int) (H * new float[]{0.08f, 0.30f, 0.50f, 0.68f}[panelPos]);
+    }
+
+    private void placeAdjuster() {
+        if (adjuster == null) return;
+        WindowManager.LayoutParams lp = (WindowManager.LayoutParams) adjuster.getLayoutParams();
+        lp.y = panelY();
+        try { wm.updateViewLayout(adjuster, lp); } catch (Exception ignored) { }
+    }
+
+    /** Les valeurs du réglage en cours, telles qu'elles sont enregistrées. */
+    private String values() {
+        switch (mode) {
+            case 1:
+            case 2: {
+                boolean l = mode == 1;
+                return "centre x " + btnX(l) + " px · icône " + btnSize(l)
+                        + " dp · zone " + btnZone(l) + " px\n" + btnRect(l).toShortString();
+            }
+            case 3:
+                return "haut " + prefs.getInt("m_top", 18) + " dp · bas "
+                        + prefs.getInt("m_bottom", 115) + " dp\n" + maskTopRect().toShortString();
+            case 4: {
+                int rt = prefs.getInt("m_rtop", -1);
+                return "largeur " + prefs.getInt("m_right", 58) + " dp · haut "
+                        + (rt < 0 ? "comme le cache du haut" : rt + " dp") + "\n"
+                        + maskRightRect().toShortString();
+            }
+            case 5:
+                return "appui en " + macroX() + "," + macroY() + " px";
+            case 6: {
+                int sx = prefs.getInt("swipe_x", -1), sy = prefs.getInt("swipe_y", -1);
+                return "départ " + (sx < 0 ? W / 2 : sx) + "," + (sy < 0 ? (int) (H * 0.32) : sy)
+                        + " px · longueur " + prefs.getInt("swipe_dist", 55) + " dp";
+            }
+            default:
+                return "hauteur " + prefs.getInt("bar_height", 56) + " dp · bas "
+                        + prefs.getInt("bar_gap", 15) + " dp\n" + barRect().toShortString()
+                        + " · couleur " + String.format("#%06X", barColor() & 0xFFFFFF);
+        }
+    }
+
+    private void setInt(String key, int v) {
+        prefs.edit().putInt(key, v).apply();
+    }
+
+    /** Les flèches : déplacent l'élément choisi. Un pas vaut 2 px, ou 1 dp. */
+    private void move(int dx, int dy) {
+        switch (mode) {
+            case 0:
+                nudge(0, dy * 2, 0, dy * 2);
+                break;
+            case 1:
+                setInt("bg_x", btnX(true) + dx * 6);
+                break;
+            case 2:
+                setInt("bd_x", btnX(false) + dx * 6);
+                break;
+            case 3:
+                setInt("m_top", Math.max(0, prefs.getInt("m_top", 18) + dy));
+                setInt("m_bottom", Math.max(4, prefs.getInt("m_bottom", 115) + dy));
+                break;
+            case 4: {
+                int rt = prefs.getInt("m_rtop", -1);
+                if (rt < 0) rt = prefs.getInt("m_bottom", 115);
+                setInt("m_rtop", Math.max(0, rt + dy));
+                if (dx != 0) setInt("m_right", Math.max(0, prefs.getInt("m_right", 58) + dx));
+                break;
+            }
+            case 5:
+                setInt("macro_x", macroX() + dx * 6);
+                setInt("macro_y", macroY() + dy * 6);
+                break;
+            case 6: {
+                int sx = prefs.getInt("swipe_x", -1), sy = prefs.getInt("swipe_y", -1);
+                setInt("swipe_x", (sx < 0 ? W / 2 : sx) + dx * 6);
+                setInt("swipe_y", (sy < 0 ? (int) (H * 0.32) : sy) + dy * 6);
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    /** Les boutons − et + : changent la taille de l'élément choisi. */
+    private void resize(int d) {
+        switch (mode) {
+            case 0:
+                setInt("bar_height", Math.max(20, prefs.getInt("bar_height", 56) + d));
+                break;
+            case 1:
+                setInt("bg_size", Math.max(4, btnSize(true) + d));
+                break;
+            case 2:
+                setInt("bd_size", Math.max(4, btnSize(false) + d));
+                break;
+            case 3:
+                setInt("m_bottom", Math.max(4, prefs.getInt("m_bottom", 115) + d));
+                break;
+            case 4:
+                setInt("m_right", Math.max(0, prefs.getInt("m_right", 58) + d));
+                break;
+            case 5:
+                break;
+            case 6:
+                setInt("swipe_dist", Math.max(10, prefs.getInt("swipe_dist", 55) + d));
+                break;
+            default:
+                break;
+        }
+    }
+
+    /** Un simple appui sur la cible, sans la suite de la macro. */
+    private void tapOnce() {
+        maskOffUntil = SystemClock.uptimeMillis() + 700;
+        blockTop = blocker(blockTop, new Rect());
+        Path p = new Path();
+        p.moveTo(macroX(), macroY());
+        tap(p, 60, "test en " + macroX() + "," + macroY());
     }
 
     private android.widget.LinearLayout row(String[] names, Runnable[] actions) {
@@ -992,7 +1249,7 @@ public class MaskService extends AccessibilityService {
             final Runnable a = actions[i];
             android.widget.Button b = new android.widget.Button(this);
             b.setText(names[i]);
-            b.setTextSize(11);
+            b.setTextSize(names.length > 4 ? 10 : 11);
             b.setAllCaps(false);
             b.setPadding(dp(2), 0, dp(2), 0);
             b.setOnClickListener(v -> a.run());

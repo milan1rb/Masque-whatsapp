@@ -83,6 +83,10 @@ public class MainActivity extends Activity {
         check("hide_in_chat", "Masquer la barre dans une conversation", true);
         number("bar_height", 56, 24, 120, "Hauteur de la barre, en dp (56 = comme Instagram)");
         number("bar_gap", 15, 0, 80, "Distance au bas de l'écran, en dp (15 = comme Instagram)");
+        number("bg_size", 13, 4, 40, "Taille de l'icône Messages, en dp");
+        number("bd_size", 11, 4, 40, "Taille de l'icône Recherche, en dp");
+        number("bg_w", 0, 0, 400, "Largeur de la zone Messages, en dp (0 = d'après l'icône)");
+        number("bd_w", 0, 0, 400, "Largeur de la zone Recherche, en dp (0 = d'après l'icône)");
         number("search_index", 0, 0, 8, "Numéro de l'onglet Recherche (0 = trouvé tout seul)");
 
         title("Bouton Recherche");
@@ -90,6 +94,9 @@ public class MainActivity extends Activity {
                 + "barre « Rechercher » en haut, puis glisser un peu vers le bas pour "
                 + "refermer le clavier et voir les comptes consultés récemment.");
         check("swipe_recent", "Lancer la macro après le clic", true);
+        check("gestures", "Autoriser les appuis et glissements simulés", true);
+        check("macro_nodes", "Laisser l'app chercher le champ toute seule "
+                + "(déconseillé : l'appui peut partir ailleurs)", false);
         number("field_delay", 550, 100, 3000,
                 "Attente avant d'appuyer sur la barre Rechercher, en millisecondes");
         number("swipe_dist", 55, 10, 200, "Longueur du glissement, en dp");
@@ -110,14 +117,28 @@ public class MainActivity extends Activity {
         check("debug", "Mode test : barre rouge transparente", false);
 
         title("Réglage dans Instagram");
-        help("Ouvre Instagram avec un panneau pour déplacer la barre et ajuster sa couleur en direct.");
+        help("Ouvre Instagram avec un panneau qui permet de tout déplacer et "
+                + "redimensionner en direct : la barre, chacun des deux boutons et sa zone "
+                + "tactile, les deux caches, le point où la macro appuie et le glissement. "
+                + "Choisis d'abord l'élément, puis utilise les flèches et les boutons − +. "
+                + "Les repères de couleur montrent les zones : bleu les boutons, vert les "
+                + "caches, rose la cible de la macro, jaune le glissement. "
+                + "« Tester l'appui » et « Tester la macro » les déclenchent tout de suite, "
+                + "et tout est noté dans le journal.");
+        button("Régler et tester dans Instagram", v -> {
+            prefs.edit().putBoolean("adjust", true).apply();
+            openInsta();
+        });
         button("Remettre la barre à sa position d'origine", v -> {
             prefs.edit().remove("adj").apply();
             toast("Position d'origine rétablie");
         });
-        button("Régler la barre dans Instagram", v -> {
-            prefs.edit().putBoolean("adjust", true).apply();
-            openInsta();
+        button("Tout remettre à zéro (sauf l'application visée)", v -> {
+            String pkg = prefs.getString("pkg", "");
+            boolean on = prefs.getBoolean("enabled", true);
+            prefs.edit().clear().putString("pkg", pkg).putBoolean("enabled", on).apply();
+            toast("Réglages remis à zéro — rouvre cette page");
+            recreate();
         });
 
         title("Diagnostic");
