@@ -374,7 +374,7 @@ public class MaskService extends AccessibilityService {
 
     /** Appui sur la fausse barre : moitié gauche = Rechercher, droite = Messages. */
     private void barTap(float x) {
-        if (x < W / 2f) openSearch(); else openDirect();
+        if (x < W / 2f) openDirect(); else openSearch();
     }
 
     private void openSearch() {
@@ -573,9 +573,9 @@ public class MaskService extends AccessibilityService {
 
             float half = bar.width() / 2f;
             int cy = bar.centerY();
-            drawSearch(c, (int) (bar.left + half / 2), cy,
+            drawDirect(c, (int) (bar.left + half / 2), cy);
+            drawSearch(c, (int) (bar.left + half + half / 2), cy,
                     selectedTab >= 0 && selectedTab == searchIndex());
-            drawDirect(c, (int) (bar.left + half + half / 2), cy);
         }
     }
 
@@ -640,7 +640,12 @@ public class MaskService extends AccessibilityService {
         if (touchView == null) {
             touchView = new View(this);
             touchView.setOnTouchListener((v, ev) -> {
-                if (ev.getAction() == MotionEvent.ACTION_UP) barTap(ev.getRawX());
+                if (ev.getAction() == MotionEvent.ACTION_OUTSIDE) return false;
+                if (ev.getAction() == MotionEvent.ACTION_UP) {
+                    Rect b = barRect();
+                    // on n'agit que si l'appui est bien tombé dans la barre
+                    if (ev.getRawY() >= b.top && ev.getRawY() <= b.bottom) barTap(ev.getRawX());
+                }
                 return true;
             });
             try {
@@ -680,6 +685,7 @@ public class MaskService extends AccessibilityService {
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(w, h,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                         | extraFlags,

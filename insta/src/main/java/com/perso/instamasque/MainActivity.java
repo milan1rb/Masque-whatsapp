@@ -99,6 +99,10 @@ public class MainActivity extends Activity {
 
         title("Réglage dans Instagram");
         help("Ouvre Instagram avec un panneau pour déplacer la barre et ajuster sa couleur en direct.");
+        button("Remettre la barre à sa position d'origine", v -> {
+            prefs.edit().remove("adj").apply();
+            toast("Position d'origine rétablie");
+        });
         button("Régler la barre dans Instagram", v -> {
             prefs.edit().putBoolean("adjust", true).apply();
             openInsta();
