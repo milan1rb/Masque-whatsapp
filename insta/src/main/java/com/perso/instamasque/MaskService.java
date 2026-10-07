@@ -162,9 +162,22 @@ public class MaskService extends AccessibilityService {
         super.onDestroy();
     }
 
-    /** L'application traitée : Instagram, ou celle que tu as fait détecter. */
+    /**
+     * Les versions d'Instagram sont reconnues à leur nom : l'officielle comme les
+     * versions modifiées (com.dfinstagram.android et autres). Une application
+     * détectée à la main prend le pas sur ce choix.
+     */
+    boolean isTarget(String pkg) {
+        String stored = prefs.getString("pkg", "");
+        if (!stored.isEmpty()) return pkg.equals(stored);
+        return pkg.toLowerCase(Locale.ROOT).contains("instagram");
+    }
+
+    /** Le nom exact de l'application, pour lui envoyer un lien. */
     String target() {
-        return prefs.getString("pkg", INSTA);
+        String stored = prefs.getString("pkg", "");
+        if (!stored.isEmpty()) return stored;
+        return prefs.getString("seen", INSTA);
     }
 
     private void metrics() {
@@ -178,7 +191,11 @@ public class MaskService extends AccessibilityService {
 
     private void update() {
         AccessibilityNodeInfo root = getRootInActiveWindow();
-        if (root == null) return;
+        if (root == null) {          // plus aucune fenêtre lisible : on retire la barre
+            inInsta = false;
+            hideBar();
+            return;
+        }
         String pkg = String.valueOf(root.getPackageName());
 
         // Détection : la prochaine application ouverte devient celle que l'on traite
@@ -189,13 +206,16 @@ public class MaskService extends AccessibilityService {
             log("Application détectée : " + pkg);
         }
 
-        if (!pkg.equals(target())) {
-            if (!pkg.equals("com.android.systemui")) {
-                inInsta = false;
-                hideBar();
-                hideAdjuster();
-            }
+        // 2. Hors de l'application visée — y compris les applications récentes,
+        //    l'écran d'accueil ou le volet des notifications — la barre disparaît.
+        if (!isTarget(pkg)) {
+            inInsta = false;
+            hideBar();
+            hideAdjuster();
             return;
+        }
+        if (!pkg.equals(prefs.getString("seen", ""))) {
+            prefs.edit().putString("seen", pkg).apply();
         }
 
         long now = SystemClock.uptimeMillis();

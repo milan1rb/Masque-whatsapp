@@ -26,6 +26,7 @@ public class MainActivity extends Activity {
     private TextView status;
     private TextView dumpView;
     private TextView appInfo;
+    private Button onOff;
     private LinearLayout root;
 
     @Override
@@ -46,13 +47,21 @@ public class MainActivity extends Activity {
         status.setPadding(0, 0, 0, dp(8));
         root.addView(status);
 
+        onOff = new Button(this);
+        onOff.setTextSize(18);
+        onOff.setOnClickListener(v -> {
+            prefs.edit().putBoolean("enabled", !prefs.getBoolean("enabled", true)).apply();
+            refreshOnOff();
+        });
+        root.addView(onOff);
+
         button("Ouvrir les réglages d'accessibilité",
                 v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
 
         title("Application visée");
-        help("Par défaut l'application Instagram officielle. Si tu utilises une autre version "
-                + "(clone, application dupliquée, version modifiée), touche Détecter puis ouvre-la : "
-                + "elle sera retenue.");
+        help("Toutes les versions d'Instagram sont reconnues d'office, l'officielle comme "
+                + "les versions modifiées. Si la tienne ne l'est pas, touche Détecter puis "
+                + "ouvre-la : elle sera retenue définitivement.");
         appInfo = new TextView(this);
         appInfo.setPadding(0, 0, 0, dp(6));
         root.addView(appInfo);
@@ -60,17 +69,16 @@ public class MainActivity extends Activity {
             prefs.edit().putBoolean("detect", true).apply();
             toast("Ouvre maintenant l'application à traiter");
         });
-        button("Revenir à Instagram", v -> {
+        button("Oublier l'application forcée", v -> {
             prefs.edit().remove("pkg").apply();
             refreshApp();
-            toast("Instagram officiel");
+            toast("Retour à la reconnaissance automatique");
         });
 
         title("Barre du bas");
         help("La vraie barre d'Instagram est recouverte. Deux boutons la remplacent : "
                 + "Rechercher à gauche, Messages à droite. Elle reste affichée dans la recherche, "
                 + "où Instagram masque la sienne.");
-        check("enabled", "Activer sur Instagram", true);
         check("divider", "Trait de séparation en haut", true);
         check("hide_in_chat", "Masquer la barre dans une conversation", true);
         number("bar_height", 56, 24, 120, "Hauteur de la barre, en dp (56 = comme Instagram)");
@@ -111,15 +119,27 @@ public class MainActivity extends Activity {
         root.addView(dumpView);
     }
 
+    private void refreshOnOff() {
+        if (onOff == null) return;
+        boolean on = prefs.getBoolean("enabled", true);
+        onOff.setText(on ? "Barre activée  ·  toucher pour arrêter"
+                         : "Barre arrêtée  ·  toucher pour activer");
+        onOff.setTextColor(on ? 0xFF4CAF50 : 0xFFE53935);
+    }
+
     private void refreshApp() {
         if (appInfo == null) return;
-        String p = prefs.getString("pkg", "com.instagram.android");
-        appInfo.setText("Application traitée : " + p);
+        String forced = prefs.getString("pkg", "");
+        String seen = prefs.getString("seen", "");
+        if (!forced.isEmpty()) appInfo.setText("Application forcée : " + forced);
+        else if (!seen.isEmpty()) appInfo.setText("Application reconnue : " + seen);
+        else appInfo.setText("Toute version d'Instagram, officielle ou modifiée");
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        refreshOnOff();
         refreshApp();
         boolean on = MaskService.running;
         status.setText(on ? "✅ Service actif" : "❌ Service inactif");
@@ -127,8 +147,9 @@ public class MainActivity extends Activity {
     }
 
     private void openInsta() {
-        Intent i = getPackageManager().getLaunchIntentForPackage(
-                prefs.getString("pkg", "com.instagram.android"));
+        String p = prefs.getString("pkg", "");
+        if (p.isEmpty()) p = prefs.getString("seen", "com.instagram.android");
+        Intent i = getPackageManager().getLaunchIntentForPackage(p);
         if (i == null) {
             toast("Instagram introuvable");
             return;
