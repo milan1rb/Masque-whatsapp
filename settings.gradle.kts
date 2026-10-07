@@ -5,3 +5,5 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = "WaMasque"
+
+include(":insta")

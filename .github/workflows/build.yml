@@ -22,7 +22,7 @@ jobs:
       - name: Build
         run: |
           set -o pipefail
-          gradle assembleDebug 2>&1 | tee /tmp/build.log || echo "BUILD_FAILED" >> /tmp/build.log
+          gradle assembleDebug :insta:assembleDebug 2>&1 | tee /tmp/build.log || echo "BUILD_FAILED" >> /tmp/build.log
       - name: Publier le journal de compilation
         if: always()
         run: |
@@ -34,14 +34,20 @@ jobs:
           git push origin HEAD:buildlog --force
       - name: Verifier
         run: grep -q BUILD_FAILED /tmp/build.log && exit 1 || true
-      - run: cp build/outputs/apk/debug/*.apk WaMasque.apk
+      - run: |
+          cp build/outputs/apk/debug/*.apk WaMasque.apk
+          cp insta/build/outputs/apk/debug/*.apk IgMasque.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: WaMasque-apk
-          path: WaMasque.apk
+          name: apks
+          path: |
+            WaMasque.apk
+            IgMasque.apk
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: WA Masque (build ${{ github.run_number }})
-          files: WaMasque.apk
+          name: Masques (build ${{ github.run_number }})
+          files: |
+            WaMasque.apk
+            IgMasque.apk
           make_latest: true
