@@ -58,6 +58,8 @@ public class MaskService extends AccessibilityService {
     private BarCanvas canvas;      // le dessin de la barre
     private View touchView;        // la fenêtre qui reçoit les appuis
     private View adjuster;         // le panneau de réglage
+    private View blockTop;         // cache du haut de la page Récent
+    private View blockRight;       // cache de la colonne des croix
 
     private boolean scheduled = false;
     private int W = 1080, H = 2400;
@@ -71,7 +73,9 @@ public class MaskService extends AccessibilityService {
     private int selectedTab = -1;
     private int searchTab = -1;          // l'onglet Recherche, repéré par son nom
     private long touchOffUntil = 0;      // le temps d'un appui à travers la barre
+    private long maskOffUntil = 0;       // le temps d'un appui à travers les caches
     private String launcherPkg = "";
+    private boolean onRecent = false;    // la page des comptes consultés récemment
 
     private final Runnable tick = () -> {
         scheduled = false;
@@ -158,6 +162,7 @@ public class MaskService extends AccessibilityService {
         instance = null;
         handler.removeCallbacks(tick);
         hideBar();
+        hideMasks();
         hideAdjuster();
         super.onDestroy();
     }
@@ -194,6 +199,7 @@ public class MaskService extends AccessibilityService {
         if (root == null) {          // plus aucune fenêtre lisible : on retire la barre
             inInsta = false;
             hideBar();
+            hideMasks();
             return;
         }
         String pkg = String.valueOf(root.getPackageName());
@@ -211,6 +217,7 @@ public class MaskService extends AccessibilityService {
         if (!isTarget(pkg)) {
             inInsta = false;
             hideBar();
+            hideMasks();
             hideAdjuster();
             return;
         }
@@ -228,16 +235,28 @@ public class MaskService extends AccessibilityService {
 
         if (!prefs.getBoolean("enabled", true)) {
             hideBar();
+            hideMasks();
             return;
         }
 
+        List<Item> items = new ArrayList<>();
+        collect(root, 0, items, 1500);
+
         if (now - lastScan > 200) {
             lastScan = now;
-            scanTabs(root, now);
+            scanTabs(items, now);
         }
 
+        // Les caches de la page « Récent » restent même quand le clavier est ouvert
+        boolean recent = prefs.getBoolean("mask_recent", true) && recentPage(items);
+        if (recent != onRecent) {
+            onRecent = recent;
+            log(recent ? "Page Récent : caches posés" : "Page Récent quittée");
+        }
+        if (recent) showMasks(); else hideMasks();
+
         // Dans une conversation, ou clavier ouvert : la barre s'efface
-        if (imeVisible() || inConversation(root)) {
+        if (imeVisible() || inConversation(items)) {
             hideBar();
             schedule(150);
             return;
@@ -247,11 +266,23 @@ public class MaskService extends AccessibilityService {
         schedule(150);
     }
 
-    /** Repère la vraie barre d'Instagram et retient sa position. */
-    private void scanTabs(AccessibilityNodeInfo root, long now) {
-        List<Item> items = new ArrayList<>();
-        collect(root, 0, items, 1500);
+    /**
+     * La page des comptes consultés récemment se reconnaît à son titre « Récent »,
+     * tout en haut de la liste.
+     */
+    private boolean recentPage(List<Item> items) {
+        for (Item it : items) {
+            if (!it.visible || it.r.isEmpty()) continue;
+            if (it.r.centerY() > H * 0.35) continue;
+            String s = (it.text + " " + it.desc).toLowerCase(Locale.ROOT).trim();
+            if (s.equals("récent") || s.equals("recent") || s.startsWith("récent ")
+                    || s.startsWith("recent ")) return true;
+        }
+        return false;
+    }
 
+    /** Repère la vraie barre d'Instagram et retient sa position. */
+    private void scanTabs(List<Item> items, long now) {
         int bandTop = H - dp(130);
         List<Rect> found = new ArrayList<>();
         List<AccessibilityNodeInfo> nodes = new ArrayList<>();
@@ -333,6 +364,26 @@ public class MaskService extends AccessibilityService {
         return new Rect(0, top + o[1], W, Math.min(H, bottom) + o[3]);
     }
 
+    /**
+     * Le cache du haut de la page Récent : la flèche de retour, la barre
+     * « Rechercher » et la ligne « Récent / Voir tout ».
+     */
+    private Rect maskTopRect() {
+        int from = dp(prefs.getInt("m_top", 18));
+        int to = dp(prefs.getInt("m_bottom", 115));
+        if (to <= from) return new Rect();
+        return new Rect(0, from, W, to);
+    }
+
+    /** Le cache de la colonne de croix, à droite de la liste. */
+    private Rect maskRightRect() {
+        int w = dp(prefs.getInt("m_right", 58));
+        int top = dp(prefs.getInt("m_bottom", 115));
+        int bottom = barRect().top;
+        if (w <= 0 || bottom <= top) return new Rect();
+        return new Rect(W - w, top, W, bottom);
+    }
+
     private int[] offsets() {
         String[] n = prefs.getString("adj", "").split(",");
         int[] o = new int[4];
@@ -347,10 +398,8 @@ public class MaskService extends AccessibilityService {
     }
 
     /** Une conversation se reconnaît à son champ de saisie, en bas de l'écran. */
-    private boolean inConversation(AccessibilityNodeInfo root) {
+    private boolean inConversation(List<Item> items) {
         if (!prefs.getBoolean("hide_in_chat", true)) return false;
-        List<Item> items = new ArrayList<>();
-        collect(root, 0, items, 900);
         for (Item it : items) {
             if (it.visible && it.node.isEditable() && it.r.centerY() > H * 0.7) return true;
         }
@@ -378,12 +427,16 @@ public class MaskService extends AccessibilityService {
     }
 
     private void openSearch() {
+        openSearch(true);
+    }
+
+    private void openSearch(boolean mayGoBack) {
         int idx = searchIndex();
-        // 1. demander directement à l'onglet de s'ouvrir
-        if (idx >= 0 && idx < tabNodes.size()) {
+        AccessibilityNodeInfo n = freshTab(idx);
+
+        // 1. l'onglet est bien là, sous les yeux : on lui demande de s'ouvrir
+        if (n != null) {
             try {
-                AccessibilityNodeInfo n = tabNodes.get(idx);
-                n.refresh();
                 if (n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
                     selectedTab = idx;
                     if (canvas != null) canvas.invalidate();
@@ -391,19 +444,21 @@ public class MaskService extends AccessibilityService {
                     revealRecent();
                     return;
                 }
-                // 2. l'onglet refuse : on appuie vraiment dessus, à travers la barre
+                // 2. l'onglet refuse : on cherche un parent qui accepte le clic
                 AccessibilityNodeInfo p = n.getParent();
                 for (int k = 0; k < 3 && p != null; k++) {
                     if (p.isClickable() && p.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
                         selectedTab = idx;
                         log("Recherche ouverte (parent de l'onglet)");
+                        revealRecent();
                         return;
                     }
                     p = p.getParent();
                 }
+                // 3. on appuie vraiment dessus, à travers la barre
                 Rect r = new Rect();
                 n.getBoundsInScreen(r);
-                if (!r.isEmpty()) {
+                if (inBottomBand(r)) {
                     tapThrough(r);
                     selectedTab = idx;
                     return;
@@ -412,15 +467,57 @@ public class MaskService extends AccessibilityService {
                 log("Recherche : " + e);
             }
         }
-        // 3. dernier recours : le lien interne
+
+        // 4. pas de barre d'onglets sur cet écran (la boîte de réception, par
+        //    exemple) : on n'appuie SURTOUT pas sur une position mémorisée, qui
+        //    tomberait n'importe où. On passe par le lien interne.
         for (String u : new String[]{"instagram://explore", "instagram://search",
                 "https://www.instagram.com/explore/"}) {
             if (open(u)) {
                 log("Recherche ouverte par " + u);
+                revealRecent();
                 return;
             }
         }
+
+        // 5. dernier recours : revenir en arrière pour retrouver la barre d'onglets
+        if (mayGoBack) {
+            log("Recherche : pas d'onglet ici, retour en arrière");
+            performGlobalAction(GLOBAL_ACTION_BACK);
+            handler.postDelayed(() -> {
+                AccessibilityNodeInfo r2 = getRootInActiveWindow();
+                if (r2 != null) {
+                    List<Item> it2 = new ArrayList<>();
+                    collect(r2, 0, it2, 1500);
+                    scanTabs(it2, SystemClock.uptimeMillis());
+                }
+                openSearch(false);
+            }, 600);
+            return;
+        }
         log("Recherche : aucun onglet trouvé (" + tabNames + ")");
+    }
+
+    /**
+     * L'onglet mémorisé, mais seulement s'il est encore réellement affiché dans
+     * la barre du bas. Sans cette vérification, un onglet périmé garde ses
+     * anciennes coordonnées et l'appui part au hasard sur l'écran.
+     */
+    private AccessibilityNodeInfo freshTab(int idx) {
+        if (idx < 0 || idx >= tabNodes.size()) return null;
+        try {
+            AccessibilityNodeInfo n = tabNodes.get(idx);
+            if (n == null || !n.refresh() || !n.isVisibleToUser()) return null;
+            Rect r = new Rect();
+            n.getBoundsInScreen(r);
+            return inBottomBand(r) ? n : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private boolean inBottomBand(Rect r) {
+        return !r.isEmpty() && r.centerY() > H - dp(130) && r.centerY() < H;
     }
 
     private int searchIndex() {
@@ -436,6 +533,62 @@ public class MaskService extends AccessibilityService {
      */
     private void revealRecent() {
         if (!prefs.getBoolean("swipe_recent", true)) return;
+        handler.postDelayed(this::tapField, prefs.getInt("field_delay", 550));
+    }
+
+    /**
+     * Deuxième temps de la macro : appuyer sur la barre « Rechercher » en haut
+     * de l'écran. C'est elle qui fait apparaître la liste des comptes récents.
+     */
+    private void tapField() {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        Rect box = null;
+        boolean ok = false;
+        if (root != null) {
+            List<Item> items = new ArrayList<>();
+            collect(root, 0, items, 1200);
+            for (Item it : items) {
+                if (!it.visible || it.r.isEmpty()) continue;
+                if (it.r.centerY() > H * 0.2) continue;          // seulement tout en haut
+                if (it.r.width() < W / 2) continue;              // le champ est très large
+                if (it.r.height() > dp(90)) continue;
+                String s = (it.text + " " + it.desc + " " + it.id).toLowerCase(Locale.ROOT);
+                boolean named = s.contains("recherch") || s.contains("search");
+                if (!it.node.isEditable() && !named) continue;
+                box = new Rect(it.r);
+                AccessibilityNodeInfo c = clickable(it.node);
+                try {
+                    if (c != null && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) ok = true;
+                    else if (it.node.isEditable()
+                            && it.node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) ok = true;
+                } catch (Exception ignored) { }
+                if (ok) {
+                    log("Barre Rechercher touchée " + box.toShortString());
+                    break;
+                }
+            }
+        }
+        if (!ok) {   // personne n'a accepté le clic : un vrai appui, au bon endroit
+            int cx = box == null ? W / 2 : box.centerX();
+            int cy = box == null ? dp(52) : box.centerY();
+            maskOffUntil = SystemClock.uptimeMillis() + 700;
+            blockTop = blocker(blockTop, new Rect());
+            try {
+                Path p = new Path();
+                p.moveTo(cx, cy);
+                boolean sent = dispatchGesture(new GestureDescription.Builder()
+                        .addStroke(new GestureDescription.StrokeDescription(p, 0, 60)).build(),
+                        null, null);
+                log("Barre Rechercher : appui simulé en " + cx + "," + cy + " (envoyé : " + sent + ")");
+            } catch (Exception e) {
+                log("Barre Rechercher : " + e);
+            }
+        }
+        swipeDown();
+    }
+
+    /** Troisième temps : le petit glissement vers le bas, qui referme le clavier. */
+    private void swipeDown() {
         int delay = prefs.getInt("swipe_delay", 450);
         handler.postDelayed(() -> {
             int dist = dp(prefs.getInt("swipe_dist", 55));
@@ -546,6 +699,8 @@ public class MaskService extends AccessibilityService {
 
     class BarCanvas extends View {
         private Rect bar = new Rect();
+        private Rect mt = new Rect();
+        private Rect mr = new Rect();
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
 
         BarCanvas(MaskService ctx) {
@@ -559,8 +714,20 @@ public class MaskService extends AccessibilityService {
             invalidate();
         }
 
+        void setMasks(Rect top, Rect right) {
+            if (top.equals(mt) && right.equals(mr)) return;
+            mt = new Rect(top);
+            mr = new Rect(right);
+            invalidate();
+        }
+
         @Override
         protected void onDraw(Canvas c) {
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(barColor());
+            if (!mt.isEmpty()) c.drawRect(mt.left, mt.top, mt.right, mt.bottom, p);
+            if (!mr.isEmpty()) c.drawRect(mr.left, mr.top, mr.right, mr.bottom, p);
+
             if (bar.isEmpty()) return;
             p.setStyle(Paint.Style.FILL);
             p.setColor(barColor());
@@ -617,14 +784,78 @@ public class MaskService extends AccessibilityService {
 
     // ---------- Fenêtres ----------
 
+    /** La toile de dessin : une seule fenêtre, plein écran, qui ne reçoit aucun appui. */
+    private boolean ensureCanvas() {
+        if (canvas != null) return true;
+        if (wm == null) return false;
+        canvas = new BarCanvas(this);
+        WindowManager.LayoutParams lp = params(0, 0, W, H,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
+        try {
+            wm.addView(canvas, lp);
+        } catch (Exception e) {
+            canvas = null;
+            return false;
+        }
+        return true;
+    }
+
+    // ---------- Caches de la page Récent ----------
+
+    private void showMasks() {
+        if (!ensureCanvas()) return;
+        final Rect top = maskTopRect();
+        final Rect right = maskRightRect();
+        canvas.setMasks(top, right);
+        // pendant un appui simulé, les caches laissent passer : le dessin reste,
+        // seules les fenêtres qui avalent les appuis s'effacent un instant
+        final boolean paused = SystemClock.uptimeMillis() < maskOffUntil;
+        handler.post(() -> {
+            blockTop = blocker(blockTop, paused ? new Rect() : top);
+            blockRight = blocker(blockRight, paused ? new Rect() : right);
+        });
+    }
+
+    private void hideMasks() {
+        if (canvas != null) canvas.setMasks(new Rect(), new Rect());
+        blockTop = blocker(blockTop, new Rect());
+        blockRight = blocker(blockRight, new Rect());
+        onRecent = false;
+    }
+
+    /** Une fenêtre invisible qui avale les appuis de sa seule zone. */
+    private View blocker(View v, Rect r) {
+        if (wm == null) return v;
+        if (r.isEmpty()) {
+            if (v != null) {
+                try { wm.removeView(v); } catch (Exception ignored) { }
+            }
+            return null;
+        }
+        if (v == null) {
+            View nv = new View(this);
+            nv.setOnTouchListener((vv, ev) -> ev.getAction() != MotionEvent.ACTION_OUTSIDE);
+            try {
+                wm.addView(nv, params(r.left, r.top, r.width(), r.height(), 0));
+            } catch (Exception e) {
+                return null;
+            }
+            return nv;
+        }
+        WindowManager.LayoutParams lp = (WindowManager.LayoutParams) v.getLayoutParams();
+        if (lp.x != r.left || lp.y != r.top || lp.width != r.width() || lp.height != r.height()) {
+            lp.x = r.left;
+            lp.y = r.top;
+            lp.width = r.width();
+            lp.height = r.height();
+            try { wm.updateViewLayout(v, lp); } catch (Exception ignored) { }
+        }
+        return v;
+    }
+
     private void showBar(Rect r) {
         if (wm == null || r.isEmpty()) return;
-        if (canvas == null) {
-            canvas = new BarCanvas(this);
-            WindowManager.LayoutParams lp = params(0, 0, W, H,
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
-            try { wm.addView(canvas, lp); } catch (Exception e) { canvas = null; return; }
-        }
+        if (!ensureCanvas()) return;
         canvas.set(r);
 
         boolean paused = SystemClock.uptimeMillis() < touchOffUntil;

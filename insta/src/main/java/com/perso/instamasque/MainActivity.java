@@ -77,7 +77,7 @@ public class MainActivity extends Activity {
 
         title("Barre du bas");
         help("La vraie barre d'Instagram est recouverte. Deux boutons la remplacent : "
-                + "Rechercher à gauche, Messages à droite. Elle reste affichée dans la recherche, "
+                + "Messages à gauche, Rechercher à droite. Elle reste affichée dans la recherche, "
                 + "où Instagram masque la sienne.");
         check("divider", "Trait de séparation en haut", true);
         check("hide_in_chat", "Masquer la barre dans une conversation", true);
@@ -86,11 +86,23 @@ public class MainActivity extends Activity {
         number("search_index", 0, 0, 8, "Numéro de l'onglet Recherche (0 = trouvé tout seul)");
 
         title("Bouton Recherche");
-        help("Après être allé dans la recherche, un petit glissement vers le bas fait "
-                + "apparaître les comptes consultés récemment.");
-        check("swipe_recent", "Glisser vers le bas après le clic", true);
+        help("La macro se déroule en trois temps : ouvrir la recherche, appuyer sur la "
+                + "barre « Rechercher » en haut, puis glisser un peu vers le bas pour "
+                + "refermer le clavier et voir les comptes consultés récemment.");
+        check("swipe_recent", "Lancer la macro après le clic", true);
+        number("field_delay", 550, 100, 3000,
+                "Attente avant d'appuyer sur la barre Rechercher, en millisecondes");
         number("swipe_dist", 55, 10, 200, "Longueur du glissement, en dp");
         number("swipe_delay", 450, 100, 2000, "Attente avant le glissement, en millisecondes");
+
+        title("Caches de la page Récent");
+        help("Sur la page des comptes récents, le haut de l'écran (retour, barre de "
+                + "recherche, ligne « Récent / Voir tout ») et la colonne des croix à "
+                + "droite sont recouverts et ne répondent plus.");
+        check("mask_recent", "Poser les caches", true);
+        number("m_top", 18, 0, 200, "Début du cache du haut, en dp sous le bord de l'écran");
+        number("m_bottom", 115, 20, 400, "Fin du cache du haut, en dp");
+        number("m_right", 58, 0, 200, "Largeur du cache des croix, à droite, en dp");
 
         title("Couleurs");
         hex("color", MaskService.DEFAULT_COLOR, "Fond de la barre");
