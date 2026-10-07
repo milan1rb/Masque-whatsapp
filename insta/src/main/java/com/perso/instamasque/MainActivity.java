@@ -85,14 +85,21 @@ public class MainActivity extends Activity {
         number("bar_gap", 15, 0, 80, "Distance au bas de l'écran, en dp (15 = comme Instagram)");
         number("bg_size", 13, 4, 40, "Taille de l'icône Messages, en dp");
         number("bd_size", 11, 4, 40, "Taille de l'icône Recherche, en dp");
-        number("bg_w", 0, 0, 400, "Largeur de la zone Messages, en dp (0 = d'après l'icône)");
-        number("bd_w", 0, 0, 400, "Largeur de la zone Recherche, en dp (0 = d'après l'icône)");
+        number("bg_w", 0, 0, 400, "Largeur de la zone tactile Messages, en dp (0 = large)");
+        number("bd_w", 0, 0, 400, "Largeur de la zone tactile Recherche, en dp (0 = large)");
+        number("bg_th", 0, 0, 300, "Hauteur de la zone tactile Messages, en dp "
+                + "(0 = hauteur de la barre)");
+        number("bd_th", 0, 0, 300, "Hauteur de la zone tactile Recherche, en dp "
+                + "(0 = hauteur de la barre)");
         number("search_index", 0, 0, 8, "Numéro de l'onglet Recherche (0 = trouvé tout seul)");
 
         title("Bouton Recherche");
         help("La macro se déroule en trois temps : ouvrir la recherche, appuyer sur la "
                 + "barre « Rechercher » en haut, puis glisser un peu vers le bas pour "
                 + "refermer le clavier et voir les comptes consultés récemment.");
+        check("no_repeat", "Ne rien faire si je suis déjà dans la recherche", true);
+        number("debounce", 700, 0, 3000,
+                "Délai minimum entre deux appuis sur la barre, en millisecondes");
         check("swipe_recent", "Lancer la macro après le clic", true);
         check("gestures", "Autoriser les appuis et glissements simulés", true);
         check("macro_nodes", "Laisser l'app chercher le champ toute seule "
@@ -124,7 +131,10 @@ public class MainActivity extends Activity {
                 + "Les repères de couleur montrent les zones : bleu les boutons, vert les "
                 + "caches, rose la cible de la macro, jaune le glissement. "
                 + "« Tester l'appui » et « Tester la macro » les déclenchent tout de suite, "
-                + "et tout est noté dans le journal.");
+                + "et tout est noté dans le journal.\n\n"
+                + "Le plus simple pour les zones tactiles : touche « Apprendre Msg » ou "
+                + "« Apprendre Rech », puis appuie sur l'écran exactement là où tu veux le "
+                + "bouton. La zone se centre sur ton doigt, sans rien déclencher.");
         button("Régler et tester dans Instagram", v -> {
             prefs.edit().putBoolean("adjust", true).apply();
             openInsta();

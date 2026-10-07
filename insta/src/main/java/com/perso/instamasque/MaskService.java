@@ -77,6 +77,8 @@ public class MaskService extends AccessibilityService {
     private long maskOffUntil = 0;       // le temps d'un appui à travers les caches
     private String launcherPkg = "";
     private boolean onRecent = false;    // la page des comptes consultés récemment
+    private int learn = 0;               // 1 : apprendre la zone gauche, -1 : la droite
+    private long lastTapTime = 0;        // anti-rebond des appuis sur la barre
 
     private final Runnable tick = () -> {
         scheduled = false;
@@ -321,7 +323,48 @@ public class MaskService extends AccessibilityService {
             }
         }
 
-        if (found.size() >= 4) {
+        // Une vraie barre d'onglets, c'est une seule ligne d'éléments alignés qui
+        // traverse tout l'écran. Sans cette vérification, les photos de profil des
+        // dernières conversations passaient pour des onglets — et l'appui partait
+        // sur une conversation, en bas à gauche.
+        List<Integer> line = new ArrayList<>();
+        for (int i = 0; i < found.size(); i++) {
+            List<Integer> grp = new ArrayList<>();
+            int cy = found.get(i).centerY();
+            for (int j = 0; j < found.size(); j++) {
+                if (Math.abs(found.get(j).centerY() - cy) <= dp(16)) grp.add(j);
+            }
+            if (grp.size() > line.size()) line = grp;
+        }
+        if (line.size() >= 4) {
+            int left = Integer.MAX_VALUE, right = 0;
+            for (int i : line) {
+                left = Math.min(left, found.get(i).left);
+                right = Math.max(right, found.get(i).right);
+            }
+            if (right - left < W * 3 / 4 || left > W / 8) {
+                log("Barre d'onglets refusée : " + line.size() + " éléments de " + left
+                        + " à " + right + ", ils ne traversent pas l'écran");
+                line = new ArrayList<>();
+            }
+        } else if (!found.isEmpty()) {
+            log("Barre d'onglets refusée : " + found.size() + " éléments en bas, "
+                    + "mais jamais 4 sur une même ligne");
+            line = new ArrayList<>();
+        }
+        if (line.size() >= 4) {
+            List<Rect> fr = new ArrayList<>();
+            List<AccessibilityNodeInfo> fn = new ArrayList<>();
+            List<String> fs = new ArrayList<>();
+            for (int i : line) {
+                fr.add(found.get(i));
+                fn.add(nodes.get(i));
+                fs.add(names.get(i));
+            }
+            found = fr;
+            nodes = fn;
+            names = fs;
+
             int top = Integer.MAX_VALUE, bottom = 0;
             for (Rect r : found) {
                 top = Math.min(top, r.top);
@@ -383,18 +426,45 @@ public class MaskService extends AccessibilityService {
         return Math.max(4, prefs.getInt(left ? "bg_size" : "bd_size", left ? 13 : 11));
     }
 
+    /** Le centre de la zone qui répond à l'appui : suit l'icône tant qu'il n'est pas réglé. */
+    private int zoneX(boolean left) {
+        int v = prefs.getInt(left ? "bg_tx" : "bd_tx", -1);
+        return v < 0 ? btnX(left) : Math.max(0, Math.min(W, v));
+    }
+
+    private int zoneY(boolean left) {
+        int v = prefs.getInt(left ? "bg_ty" : "bd_ty", -1);
+        return v < 0 ? barRect().centerY() : Math.max(0, Math.min(H, v));
+    }
+
     /** La largeur de la zone qui répond à l'appui, en pixels. */
     private int btnZone(boolean left) {
         int v = prefs.getInt(left ? "bg_w" : "bd_w", 0);
-        if (v <= 0) v = Math.max(56, btnSize(left) * 3);
-        return dp(v);
+        if (v > 0) return dp(v);
+        // sans réglage : une zone large, la moitié de l'écart entre les deux icônes
+        return Math.max(dp(72), Math.abs(btnX(false) - btnX(true)));
+    }
+
+    /** La hauteur de la zone, en pixels. */
+    private int zoneH(boolean left) {
+        int v = prefs.getInt(left ? "bg_th" : "bd_th", 0);
+        return v > 0 ? dp(v) : barRect().height();
     }
 
     private Rect btnRect(boolean left) {
-        Rect bar = barRect();
-        int w = btnZone(left) / 2;
-        int cx = btnX(left);
-        return new Rect(cx - w, bar.top, cx + w, bar.bottom);
+        int w = btnZone(left) / 2, h = zoneH(left) / 2;
+        int cx = zoneX(left), cy = zoneY(left);
+        return new Rect(cx - w, cy - h, cx + w, cy + h);
+    }
+
+    /** La fenêtre qui reçoit les appuis : la barre, plus les deux zones. */
+    private Rect touchRect() {
+        Rect r = new Rect(barRect());
+        r.union(btnRect(true));
+        r.union(btnRect(false));
+        if (r.top < 0) r.top = 0;
+        if (r.bottom > H) r.bottom = H;
+        return r;
     }
 
     /** Le point exact où la macro appuie pour ouvrir la barre « Rechercher ». */
@@ -472,14 +542,43 @@ public class MaskService extends AccessibilityService {
      */
     private void barTap(float fx, float fy) {
         int x = (int) fx, y = (int) fy;
+
+        // Mode apprentissage : cet appui ne déclenche rien, il place la zone
+        if (learn != 0) {
+            boolean l = learn > 0;
+            prefs.edit().putInt(l ? "bg_tx" : "bd_tx", x)
+                        .putInt(l ? "bg_ty" : "bd_ty", y).apply();
+            learn = 0;
+            log("Zone " + (l ? "Messages" : "Recherche") + " placée sur " + x + "," + y
+                    + " → " + btnRect(l).toShortString());
+            if (canvas != null) canvas.invalidate();
+            showBar(barRect());
+            return;
+        }
+
         Rect g = btnRect(true), d = btnRect(false);
         boolean left = g.contains(x, y);
         boolean right = d.contains(x, y);
         log("Appui barre en " + x + "," + y + " — Messages " + g.toShortString()
                 + " Recherche " + d.toShortString() + " → "
                 + (left ? "Messages" : right ? "Recherche" : "aucun bouton"));
-        if (left) openDirect();
-        else if (right) openSearch();
+        if (!left && !right) return;
+
+        // Anti-rebond : un même bouton ne repart pas deux fois de suite
+        long now = SystemClock.uptimeMillis();
+        if (now - lastTapTime < prefs.getInt("debounce", 700)) {
+            log("Appui trop rapproché du précédent, ignoré");
+            return;
+        }
+        lastTapTime = now;
+
+        if (left) {
+            openDirect();
+        } else if (onRecent && prefs.getBoolean("no_repeat", true)) {
+            log("Déjà dans la recherche : rien à faire");
+        } else {
+            openSearch();
+        }
     }
 
     private void openSearch() {
@@ -980,30 +1079,27 @@ public class MaskService extends AccessibilityService {
             touchView.setOnTouchListener((v, ev) -> {
                 if (ev.getAction() == MotionEvent.ACTION_OUTSIDE) return false;
                 if (ev.getAction() == MotionEvent.ACTION_UP) {
-                    Rect b = barRect();
-                    // on n'agit que si l'appui est bien tombé dans la barre
-                    if (ev.getRawY() >= b.top && ev.getRawY() <= b.bottom) {
-                        barTap(ev.getRawX(), ev.getRawY());
-                    } else {
-                        log("Appui hors de la barre ignoré : " + (int) ev.getRawX()
-                                + "," + (int) ev.getRawY() + " barre " + b.toShortString());
-                    }
+                    barTap(ev.getRawX(), ev.getRawY());
                 }
                 return true;
             });
+            Rect t = touchRect();
             try {
-                wm.addView(touchView, params(r.left, r.top, r.width(), r.height(), 0));
+                wm.addView(touchView, params(t.left, t.top, t.width(), t.height(), 0));
+                log("Fenêtre tactile " + t.toShortString());
             } catch (Exception e) {
                 touchView = null;
             }
         } else {
+            Rect t = touchRect();
             WindowManager.LayoutParams lp = (WindowManager.LayoutParams) touchView.getLayoutParams();
-            if (lp.x != r.left || lp.y != r.top || lp.width != r.width() || lp.height != r.height()) {
-                lp.x = r.left;
-                lp.y = r.top;
-                lp.width = r.width();
-                lp.height = r.height();
+            if (lp.x != t.left || lp.y != t.top || lp.width != t.width() || lp.height != t.height()) {
+                lp.x = t.left;
+                lp.y = t.top;
+                lp.width = t.width();
+                lp.height = t.height();
                 try { wm.updateViewLayout(touchView, lp); } catch (Exception ignored) { }
+                log("Fenêtre tactile " + t.toShortString());
             }
             if ((lp.flags & WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) != 0) {
                 lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
@@ -1048,7 +1144,8 @@ public class MaskService extends AccessibilityService {
     // ---------- Réglage à la main ----------
 
     private static final String[] MODES = {
-            "Barre", "Bouton Messages", "Bouton Recherche",
+            "Barre", "Icône Messages", "Icône Recherche",
+            "Zone tactile Messages", "Zone tactile Recherche",
             "Cache du haut", "Cache des croix", "Cible de la macro", "Glissement"};
     private int mode = 0;
     private int panelPos = 2;            // 0 haut, 1 milieu haut, 2 milieu bas, 3 bas
@@ -1067,21 +1164,36 @@ public class MaskService extends AccessibilityService {
 
         final Runnable[] refresh = new Runnable[1];
         refresh[0] = () -> {
-            label.setText("▸ " + MODES[mode] + "\n" + values());
+            label.setText((learn != 0 ? "✛ touche l'écran pour placer la zone\n" : "")
+                    + "▸ " + MODES[mode] + "\n" + values());
             if (canvas != null) canvas.invalidate();
             showBar(barRect());
         };
 
-        box.addView(row(new String[]{"Barre", "Messages", "Recherche"}, new Runnable[]{
+        box.addView(row(new String[]{"Barre", "Icône Msg", "Icône Rech"}, new Runnable[]{
                 () -> { mode = 0; refresh[0].run(); },
                 () -> { mode = 1; refresh[0].run(); },
                 () -> { mode = 2; refresh[0].run(); }}));
-        box.addView(row(new String[]{"Cache haut", "Cache croix", "Cible", "Glisse"},
+        box.addView(row(new String[]{"Zone Msg", "Zone Rech", "Apprendre Msg", "Apprendre Rech"},
                 new Runnable[]{
                 () -> { mode = 3; refresh[0].run(); },
                 () -> { mode = 4; refresh[0].run(); },
+                () -> {
+                    mode = 3; learn = 1;
+                    log("Apprentissage : touche l'écran là où doit être le bouton Messages");
+                    refresh[0].run();
+                },
+                () -> {
+                    mode = 4; learn = -1;
+                    log("Apprentissage : touche l'écran là où doit être le bouton Recherche");
+                    refresh[0].run();
+                }}));
+        box.addView(row(new String[]{"Cache haut", "Cache croix", "Cible", "Glisse"},
+                new Runnable[]{
                 () -> { mode = 5; refresh[0].run(); },
-                () -> { mode = 6; refresh[0].run(); }}));
+                () -> { mode = 6; refresh[0].run(); },
+                () -> { mode = 7; refresh[0].run(); },
+                () -> { mode = 8; refresh[0].run(); }}));
         box.addView(row(new String[]{"←", "→", "↑", "↓", "−", "+"}, new Runnable[]{
                 () -> { move(-1, 0); refresh[0].run(); },
                 () -> { move(1, 0); refresh[0].run(); },
@@ -1137,21 +1249,26 @@ public class MaskService extends AccessibilityService {
             case 1:
             case 2: {
                 boolean l = mode == 1;
-                return "centre x " + btnX(l) + " px · icône " + btnSize(l)
-                        + " dp · zone " + btnZone(l) + " px\n" + btnRect(l).toShortString();
+                return "centre x " + btnX(l) + " px · taille " + btnSize(l) + " dp";
             }
             case 3:
+            case 4: {
+                boolean l = mode == 3;
+                return "centre " + zoneX(l) + "," + zoneY(l) + " px · "
+                        + btnZone(l) + "×" + zoneH(l) + " px\n" + btnRect(l).toShortString();
+            }
+            case 5:
                 return "haut " + prefs.getInt("m_top", 18) + " dp · bas "
                         + prefs.getInt("m_bottom", 115) + " dp\n" + maskTopRect().toShortString();
-            case 4: {
+            case 6: {
                 int rt = prefs.getInt("m_rtop", -1);
                 return "largeur " + prefs.getInt("m_right", 58) + " dp · haut "
                         + (rt < 0 ? "comme le cache du haut" : rt + " dp") + "\n"
                         + maskRightRect().toShortString();
             }
-            case 5:
+            case 7:
                 return "appui en " + macroX() + "," + macroY() + " px";
-            case 6: {
+            case 8: {
                 int sx = prefs.getInt("swipe_x", -1), sy = prefs.getInt("swipe_y", -1);
                 return "départ " + (sx < 0 ? W / 2 : sx) + "," + (sy < 0 ? (int) (H * 0.32) : sy)
                         + " px · longueur " + prefs.getInt("swipe_dist", 55) + " dp";
@@ -1180,21 +1297,29 @@ public class MaskService extends AccessibilityService {
                 setInt("bd_x", btnX(false) + dx * 6);
                 break;
             case 3:
+                setInt("bg_tx", zoneX(true) + dx * 6);
+                setInt("bg_ty", zoneY(true) + dy * 6);
+                break;
+            case 4:
+                setInt("bd_tx", zoneX(false) + dx * 6);
+                setInt("bd_ty", zoneY(false) + dy * 6);
+                break;
+            case 5:
                 setInt("m_top", Math.max(0, prefs.getInt("m_top", 18) + dy));
                 setInt("m_bottom", Math.max(4, prefs.getInt("m_bottom", 115) + dy));
                 break;
-            case 4: {
+            case 6: {
                 int rt = prefs.getInt("m_rtop", -1);
                 if (rt < 0) rt = prefs.getInt("m_bottom", 115);
                 setInt("m_rtop", Math.max(0, rt + dy));
                 if (dx != 0) setInt("m_right", Math.max(0, prefs.getInt("m_right", 58) + dx));
                 break;
             }
-            case 5:
+            case 7:
                 setInt("macro_x", macroX() + dx * 6);
                 setInt("macro_y", macroY() + dy * 6);
                 break;
-            case 6: {
+            case 8: {
                 int sx = prefs.getInt("swipe_x", -1), sy = prefs.getInt("swipe_y", -1);
                 setInt("swipe_x", (sx < 0 ? W / 2 : sx) + dx * 6);
                 setInt("swipe_y", (sy < 0 ? (int) (H * 0.32) : sy) + dy * 6);
@@ -1218,14 +1343,20 @@ public class MaskService extends AccessibilityService {
                 setInt("bd_size", Math.max(4, btnSize(false) + d));
                 break;
             case 3:
-                setInt("m_bottom", Math.max(4, prefs.getInt("m_bottom", 115) + d));
+                setInt("bg_w", Math.max(8, btnZone(true) / dp(1) + d));
                 break;
             case 4:
-                setInt("m_right", Math.max(0, prefs.getInt("m_right", 58) + d));
+                setInt("bd_w", Math.max(8, btnZone(false) / dp(1) + d));
                 break;
             case 5:
+                setInt("m_bottom", Math.max(4, prefs.getInt("m_bottom", 115) + d));
                 break;
             case 6:
+                setInt("m_right", Math.max(0, prefs.getInt("m_right", 58) + d));
+                break;
+            case 7:
+                break;
+            case 8:
                 setInt("swipe_dist", Math.max(10, prefs.getInt("swipe_dist", 55) + d));
                 break;
             default:
