@@ -216,8 +216,8 @@ public class MaskService extends AccessibilityService {
             scanTabs(root, now);
         }
 
-        // Clavier ouvert : la barre s'efface pour ne pas gêner la saisie
-        if (imeVisible()) {
+        // Dans une conversation, ou clavier ouvert : la barre s'efface
+        if (imeVisible() || inConversation(root)) {
             hideBar();
             schedule(150);
             return;
@@ -272,6 +272,7 @@ public class MaskService extends AccessibilityService {
                 bottom = Math.max(bottom, r.bottom);
             }
             prefs.edit().putInt(key("bar_top"), top).putInt(key("bar_bottom"), bottom).apply();
+            // (retenu pour information : la géométrie dessinée est celle des réglages)
             tabs.clear();
             tabs.addAll(found);
             tabNodes.clear();
@@ -298,13 +299,18 @@ public class MaskService extends AccessibilityService {
         }
     }
 
-    /** La barre que l'on dessine : la zone de la vraie barre, pleine largeur. */
+    /**
+     * La barre que l'on dessine : toujours au même endroit, pleine largeur.
+     * Par défaut elle occupe exactement la place de la barre d'Instagram :
+     * 56 dp de haut, posée 15 dp au-dessus du bas de l'écran.
+     */
     private Rect barRect() {
-        int top = prefs.getInt(key("bar_top"), H - dp(104));
-        int bottom = prefs.getInt(key("bar_bottom"), H - dp(48));
-        int extra = prefs.getInt("bar_pad", 10);      // marge sous les icônes, réglable
+        int gap = prefs.getInt("bar_gap", 15);        // distance au bas de l'écran, en dp
+        int h = prefs.getInt("bar_height", 56);       // hauteur de la barre, en dp
+        int bottom = H - dp(gap);
+        int top = bottom - dp(h);
         int[] o = offsets();
-        return new Rect(0, top - dp(8) + o[1], W, Math.min(H, bottom + dp(extra)) + o[3]);
+        return new Rect(0, top + o[1], W, Math.min(H, bottom) + o[3]);
     }
 
     private int[] offsets() {
@@ -318,6 +324,17 @@ public class MaskService extends AccessibilityService {
 
     private String key(String base) {
         return base + ":" + W + "x" + H;
+    }
+
+    /** Une conversation se reconnaît à son champ de saisie, en bas de l'écran. */
+    private boolean inConversation(AccessibilityNodeInfo root) {
+        if (!prefs.getBoolean("hide_in_chat", true)) return false;
+        List<Item> items = new ArrayList<>();
+        collect(root, 0, items, 900);
+        for (Item it : items) {
+            if (it.visible && it.node.isEditable() && it.r.centerY() > H * 0.7) return true;
+        }
+        return false;
     }
 
     private boolean imeVisible() {
@@ -351,6 +368,7 @@ public class MaskService extends AccessibilityService {
                     selectedTab = idx;
                     if (canvas != null) canvas.invalidate();
                     log("Recherche ouverte (onglet " + (idx + 1) + ")");
+                    revealRecent();
                     return;
                 }
                 // 2. l'onglet refuse : on appuie vraiment dessus, à travers la barre
@@ -392,6 +410,44 @@ public class MaskService extends AccessibilityService {
         return tabNodes.size() >= 4 ? 1 : -1;                             // 2e onglet par défaut
     }
 
+    /**
+     * Après la recherche : un petit glissement vers le bas, qui fait apparaître
+     * les comptes consultés récemment.
+     */
+    private void revealRecent() {
+        if (!prefs.getBoolean("swipe_recent", true)) return;
+        int delay = prefs.getInt("swipe_delay", 450);
+        handler.postDelayed(() -> {
+            int dist = dp(prefs.getInt("swipe_dist", 55));
+            int x = W / 2;
+            int y0 = (int) (H * 0.32);
+            try {
+                Path move = new Path();
+                move.moveTo(x, y0);
+                move.lineTo(x, y0 + dist);
+                GestureDescription.StrokeDescription s1 =
+                        new GestureDescription.StrokeDescription(move, 0, 260, true);
+                Path hold = new Path();
+                hold.moveTo(x, y0 + dist);
+                hold.lineTo(x, y0 + dist + 1);
+                GestureDescription.StrokeDescription s2 = s1.continueStroke(hold, 0, 160, false);
+                boolean ok = dispatchGesture(new GestureDescription.Builder().addStroke(s1).build(),
+                        new GestureResultCallback() {
+                            @Override public void onCompleted(GestureDescription g) {
+                                dispatchGesture(new GestureDescription.Builder()
+                                        .addStroke(s2).build(), null, null);
+                            }
+                            @Override public void onCancelled(GestureDescription g) {
+                                log("Glissement annulé par Android");
+                            }
+                        }, null);
+                log("Comptes récents : glissement de " + dist + " px (envoyé : " + ok + ")");
+            } catch (Exception e) {
+                log("Comptes récents : " + e);
+            }
+        }, delay);
+    }
+
     /** Efface un instant la barre pour qu'un vrai appui atteigne l'application. */
     private void tapThrough(Rect r) {
         touchOffUntil = SystemClock.uptimeMillis() + 900;
@@ -404,6 +460,7 @@ public class MaskService extends AccessibilityService {
                 boolean ok = dispatchGesture(new GestureDescription.Builder()
                         .addStroke(new GestureDescription.StrokeDescription(p, 0, 60)).build(), null, null);
                 log("Recherche : appui simulé en " + cx + "," + cy + " (envoyé : " + ok + ")");
+                if (ok) revealRecent();
             } catch (Exception e) {
                 log("Recherche : appui impossible, " + e);
             }
@@ -495,7 +552,7 @@ public class MaskService extends AccessibilityService {
             }
 
             float half = bar.width() / 2f;
-            int cy = bar.top + dp(34);
+            int cy = bar.centerY();
             drawSearch(c, (int) (bar.left + half / 2), cy,
                     selectedTab >= 0 && selectedTab == searchIndex());
             drawDirect(c, (int) (bar.left + half + half / 2), cy);

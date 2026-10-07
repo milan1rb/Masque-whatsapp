@@ -72,8 +72,17 @@ public class MainActivity extends Activity {
                 + "où Instagram masque la sienne.");
         check("enabled", "Activer sur Instagram", true);
         check("divider", "Trait de séparation en haut", true);
-        number("bar_pad", 10, 0, 60, "Hauteur sous les icônes, en pixels");
+        check("hide_in_chat", "Masquer la barre dans une conversation", true);
+        number("bar_height", 56, 24, 120, "Hauteur de la barre, en dp (56 = comme Instagram)");
+        number("bar_gap", 15, 0, 80, "Distance au bas de l'écran, en dp (15 = comme Instagram)");
         number("search_index", 0, 0, 8, "Numéro de l'onglet Recherche (0 = trouvé tout seul)");
+
+        title("Bouton Recherche");
+        help("Après être allé dans la recherche, un petit glissement vers le bas fait "
+                + "apparaître les comptes consultés récemment.");
+        check("swipe_recent", "Glisser vers le bas après le clic", true);
+        number("swipe_dist", 55, 10, 200, "Longueur du glissement, en dp");
+        number("swipe_delay", 450, 100, 2000, "Attente avant le glissement, en millisecondes");
 
         title("Couleurs");
         hex("color", MaskService.DEFAULT_COLOR, "Fond de la barre");
