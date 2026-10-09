@@ -109,6 +109,13 @@ public class MainActivity extends Activity {
         number("swipe_dist", 55, 10, 200, "Longueur du glissement, en dp");
         number("swipe_delay", 450, 100, 2000, "Attente avant le glissement, en millisecondes");
 
+        title("Caches d'une conversation");
+        help("Dans une conversation, la photo de profil à gauche du nom est recouverte. "
+                + "Dans le menu de la conversation, le bouton Profil l'est aussi, avec son "
+                + "icône. Les deux se placent au pixel depuis le panneau de réglage.");
+        check("mask_chat", "Cacher la photo de profil en haut d'une conversation", true);
+        check("mask_menu", "Cacher le bouton Profil dans le menu", true);
+
         title("Caches de la page Récent");
         help("Sur la page des comptes récents, le haut de l'écran (retour, barre de "
                 + "recherche, ligne « Récent / Voir tout ») et la colonne des croix à "

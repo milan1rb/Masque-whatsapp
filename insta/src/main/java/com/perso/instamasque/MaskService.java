@@ -59,8 +59,9 @@ public class MaskService extends AccessibilityService {
     private BarCanvas canvas;      // le dessin de la barre
     private View touchView;        // la fenêtre qui reçoit les appuis
     private View adjuster;         // le panneau de réglage
-    private View blockTop;         // cache du haut de la page Récent
-    private View blockRight;       // cache de la colonne des croix
+    // 0 haut de la page Récent, 1 colonne des croix, 2 photo de profil d'une
+    // conversation, 3 bouton Profil du menu d'une conversation
+    private final View[] blocks = new View[4];
 
     private boolean scheduled = false;
     private int W = 1080, H = 2400;
@@ -77,6 +78,7 @@ public class MaskService extends AccessibilityService {
     private long maskOffUntil = 0;       // le temps d'un appui à travers les caches
     private String launcherPkg = "";
     private boolean onRecent = false;    // la page des comptes consultés récemment
+    private boolean onMenu = false;      // le menu d'une conversation
     private int learn = 0;               // 1 : apprendre la zone gauche, -1 : la droite
     private long lastTapTime = 0;        // anti-rebond des appuis sur la barre
 
@@ -254,16 +256,27 @@ public class MaskService extends AccessibilityService {
             scanTabs(items, now);
         }
 
-        // Les caches de la page « Récent » restent même quand le clavier est ouvert
+        // Les caches restent même quand le clavier est ouvert
         boolean recent = prefs.getBoolean("mask_recent", true) && recentPage(items);
         if (recent != onRecent) {
             onRecent = recent;
             log(recent ? "Page Récent : caches posés" : "Page Récent quittée");
         }
-        if (recent) showMasks(); else hideMasks();
+        boolean chat = inChat(items);
+        boolean menu = prefs.getBoolean("mask_menu", true) && menuPage(items);
+        if (menu != onMenu) {
+            onMenu = menu;
+            log(menu ? "Menu de conversation : bouton Profil caché" : "Menu quitté");
+        }
+        Rect[] m = new Rect[4];
+        m[0] = recent ? maskTopRect() : new Rect();
+        m[1] = recent ? maskRightRect() : new Rect();
+        m[2] = prefs.getBoolean("mask_chat", true) && chat ? chatRect() : new Rect();
+        m[3] = menu ? profileRect() : new Rect();
+        applyMasks(m);
 
         // Dans une conversation, ou clavier ouvert : la barre s'efface
-        if (imeVisible() || inConversation(items)) {
+        if (imeVisible() || (prefs.getBoolean("hide_in_chat", true) && chat)) {
             hideBar();
             schedule(150);
             return;
@@ -274,18 +287,56 @@ public class MaskService extends AccessibilityService {
     }
 
     /**
-     * La page des comptes consultés récemment se reconnaît à son titre « Récent »,
-     * tout en haut de la liste.
+     * La page des comptes consultés récemment : son titre « Récent » en haut de la
+     * liste, ET le champ de recherche au-dessus. Le titre seul ne suffit pas : la
+     * galerie qui sert à publier une story a aussi un album appelé « Récent », et
+     * les caches s'y posaient à tort.
      */
     private boolean recentPage(List<Item> items) {
+        String title = null;
+        boolean field = false, gallery = false;
         for (Item it : items) {
             if (!it.visible || it.r.isEmpty()) continue;
-            if (it.r.centerY() > H * 0.35) continue;
             String s = (it.text + " " + it.desc).toLowerCase(Locale.ROOT).trim();
-            if (s.equals("récent") || s.equals("recent") || s.startsWith("récent ")
-                    || s.startsWith("recent ")) return true;
+            if (s.contains("appareil photo") || s.contains("galerie")
+                    || s.contains("gallery") || s.contains("pellicule")) gallery = true;
+            if (it.r.centerY() > H * 0.35) continue;
+            if (it.node.isEditable()) field = true;
+            if (s.equals("récent") || s.equals("recent")) title = it.text + it.desc;
+        }
+        if (title != null && gallery) {
+            log("Titre « Récent » vu, mais c'est la galerie : pas de cache");
+            return false;
+        }
+        if (title != null && !field) {
+            log("Titre « Récent » vu sans champ de recherche : pas de cache");
+            return false;
+        }
+        return title != null;
+    }
+
+    /** Une conversation ouverte : son champ de saisie est en bas de l'écran. */
+    private boolean inChat(List<Item> items) {
+        for (Item it : items) {
+            if (it.visible && it.node.isEditable() && it.r.centerY() > H * 0.7) return true;
         }
         return false;
+    }
+
+    /**
+     * Le menu d'une conversation : la rangée Profil / Rechercher / Mettre en
+     * sourdine / Options, puis Thème et Confidentialité.
+     */
+    private boolean menuPage(List<Item> items) {
+        boolean profil = false, rest = false;
+        for (Item it : items) {
+            if (!it.visible) continue;
+            String s = (it.text + " " + it.desc).toLowerCase(Locale.ROOT).trim();
+            if (s.equals("profil") || s.equals("profile")) profil = true;
+            if (s.contains("sourdine") || s.contains("confidentialité")
+                    || s.contains("thème")) rest = true;
+        }
+        return profil && rest;
     }
 
     /** Repère la vraie barre d'Instagram et retient sa position. */
@@ -499,6 +550,24 @@ public class MaskService extends AccessibilityService {
         return new Rect(W - w, top, W, bottom);
     }
 
+    /** Un cache posé à un endroit fixe, donné par son centre et sa taille en pixels. */
+    private Rect pxRect(String p, int dx, int dy, int dw, int dh) {
+        int cx = prefs.getInt(p + "_cx", dx), cy = prefs.getInt(p + "_cy", dy);
+        int w = prefs.getInt(p + "_cw", dw), h = prefs.getInt(p + "_ch", dh);
+        if (w <= 0 || h <= 0) return new Rect();
+        return new Rect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2);
+    }
+
+    /** La photo de profil à gauche du nom, en haut d'une conversation. */
+    private Rect chatRect() {
+        return pxRect("chat", 240, 148, 126, 126);
+    }
+
+    /** Le bouton Profil, dans le menu d'une conversation. */
+    private Rect profileRect() {
+        return pxRect("prof", 210, 800, 190, 210);
+    }
+
     private int[] offsets() {
         String[] n = prefs.getString("adj", "").split(",");
         int[] o = new int[4];
@@ -513,14 +582,6 @@ public class MaskService extends AccessibilityService {
     }
 
     /** Une conversation se reconnaît à son champ de saisie, en bas de l'écran. */
-    private boolean inConversation(List<Item> items) {
-        if (!prefs.getBoolean("hide_in_chat", true)) return false;
-        for (Item it : items) {
-            if (it.visible && it.node.isEditable() && it.r.centerY() > H * 0.7) return true;
-        }
-        return false;
-    }
-
     private boolean imeVisible() {
         try {
             for (AccessibilityWindowInfo w : getWindows()) {
@@ -736,7 +797,7 @@ public class MaskService extends AccessibilityService {
 
         // les caches laissent passer le temps de l'appui
         maskOffUntil = SystemClock.uptimeMillis() + 700;
-        blockTop = blocker(blockTop, new Rect());
+        blocks[0] = blocker(blocks[0], new Rect());
         Path p = new Path();
         p.moveTo(cx, cy);
         tap(p, 60, "barre Rechercher en " + cx + "," + cy);
@@ -872,8 +933,7 @@ public class MaskService extends AccessibilityService {
 
     class BarCanvas extends View {
         private Rect bar = new Rect();
-        private Rect mt = new Rect();
-        private Rect mr = new Rect();
+        private Rect[] ms = new Rect[0];
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
 
         BarCanvas(MaskService ctx) {
@@ -887,10 +947,12 @@ public class MaskService extends AccessibilityService {
             invalidate();
         }
 
-        void setMasks(Rect top, Rect right) {
-            if (top.equals(mt) && right.equals(mr)) return;
-            mt = new Rect(top);
-            mr = new Rect(right);
+        void setMasks(Rect[] m) {
+            boolean same = ms.length == m.length;
+            for (int i = 0; same && i < m.length; i++) same = ms[i].equals(m[i]);
+            if (same) return;
+            ms = new Rect[m.length];
+            for (int i = 0; i < m.length; i++) ms[i] = new Rect(m[i]);
             invalidate();
         }
 
@@ -898,8 +960,9 @@ public class MaskService extends AccessibilityService {
         protected void onDraw(Canvas c) {
             p.setStyle(Paint.Style.FILL);
             p.setColor(barColor());
-            if (!mt.isEmpty()) c.drawRect(mt.left, mt.top, mt.right, mt.bottom, p);
-            if (!mr.isEmpty()) c.drawRect(mr.left, mr.top, mr.right, mr.bottom, p);
+            for (Rect m : ms) {
+                if (!m.isEmpty()) c.drawRect(m.left, m.top, m.right, m.bottom, p);
+            }
 
             if (prefs.getBoolean("adjust", false)) guides(c);
 
@@ -930,10 +993,13 @@ public class MaskService extends AccessibilityService {
                 Rect b = btnRect(l);
                 c.drawRect(b.left, b.top, b.right, b.bottom, q);
             }
-            q.setColor(0xFF76FF03);                       // les deux caches
-            Rect t = maskTopRect(), r = maskRightRect();
-            if (!t.isEmpty()) c.drawRect(t.left + 1, t.top, t.right - 1, t.bottom, q);
-            if (!r.isEmpty()) c.drawRect(r.left, r.top, r.right - 1, r.bottom, q);
+            q.setColor(0xFF76FF03);                       // les quatre caches
+            for (Rect m : new Rect[]{maskTopRect(), maskRightRect(), chatRect(), profileRect()}) {
+                if (!m.isEmpty()) {
+                    c.drawRect(Math.max(1, m.left), m.top,
+                            Math.min(W - 1, m.right), m.bottom, q);
+                }
+            }
 
             q.setColor(0xFFFF4081);                       // la cible de la macro
             int mx = macroX(), my = macroY();
@@ -1008,24 +1074,25 @@ public class MaskService extends AccessibilityService {
 
     // ---------- Caches de la page Récent ----------
 
-    private void showMasks() {
+    private void applyMasks(Rect[] m) {
         if (!ensureCanvas()) return;
-        final Rect top = maskTopRect();
-        final Rect right = maskRightRect();
-        canvas.setMasks(top, right);
-        // pendant un appui simulé, les caches laissent passer : le dessin reste,
-        // seules les fenêtres qui avalent les appuis s'effacent un instant
+        canvas.setMasks(m);
+        // pendant un appui simulé, le cache du haut laisse passer : le dessin reste,
+        // seule la fenêtre qui avale les appuis s'efface un instant
         final boolean paused = SystemClock.uptimeMillis() < maskOffUntil;
+        final Rect[] mm = m;
         handler.post(() -> {
-            blockTop = blocker(blockTop, paused ? new Rect() : top);
-            blockRight = blocker(blockRight, paused ? new Rect() : right);
+            for (int i = 0; i < blocks.length; i++) {
+                blocks[i] = blocker(blocks[i], paused && i == 0 ? new Rect() : mm[i]);
+            }
         });
     }
 
     private void hideMasks() {
-        if (canvas != null) canvas.setMasks(new Rect(), new Rect());
-        blockTop = blocker(blockTop, new Rect());
-        blockRight = blocker(blockRight, new Rect());
+        Rect[] e = new Rect[blocks.length];
+        for (int i = 0; i < e.length; i++) e[i] = new Rect();
+        if (canvas != null) canvas.setMasks(e);
+        for (int i = 0; i < blocks.length; i++) blocks[i] = blocker(blocks[i], e[i]);
         onRecent = false;
     }
 
@@ -1146,7 +1213,8 @@ public class MaskService extends AccessibilityService {
     private static final String[] MODES = {
             "Barre", "Icône Messages", "Icône Recherche",
             "Zone tactile Messages", "Zone tactile Recherche",
-            "Cache du haut", "Cache des croix", "Cible de la macro", "Glissement"};
+            "Cache du haut", "Cache des croix", "Cible de la macro", "Glissement",
+            "Photo de profil d'une conversation", "Bouton Profil du menu"};
     private int mode = 0;
     private int panelPos = 2;            // 0 haut, 1 milieu haut, 2 milieu bas, 3 bas
 
@@ -1194,6 +1262,9 @@ public class MaskService extends AccessibilityService {
                 () -> { mode = 6; refresh[0].run(); },
                 () -> { mode = 7; refresh[0].run(); },
                 () -> { mode = 8; refresh[0].run(); }}));
+        box.addView(row(new String[]{"Photo discussion", "Bouton Profil"}, new Runnable[]{
+                () -> { mode = 9; refresh[0].run(); },
+                () -> { mode = 10; refresh[0].run(); }}));
         box.addView(row(new String[]{"←", "→", "↑", "↓", "−", "+"}, new Runnable[]{
                 () -> { move(-1, 0); refresh[0].run(); },
                 () -> { move(1, 0); refresh[0].run(); },
@@ -1273,6 +1344,12 @@ public class MaskService extends AccessibilityService {
                 return "départ " + (sx < 0 ? W / 2 : sx) + "," + (sy < 0 ? (int) (H * 0.32) : sy)
                         + " px · longueur " + prefs.getInt("swipe_dist", 55) + " dp";
             }
+            case 9:
+                return chatRect().toShortString()
+                        + "\nvisible seulement dans une conversation";
+            case 10:
+                return profileRect().toShortString() + "\nvisible seulement dans le menu "
+                        + "d'une conversation";
             default:
                 return "hauteur " + prefs.getInt("bar_height", 56) + " dp · bas "
                         + prefs.getInt("bar_gap", 15) + " dp\n" + barRect().toShortString()
@@ -1325,6 +1402,14 @@ public class MaskService extends AccessibilityService {
                 setInt("swipe_y", (sy < 0 ? (int) (H * 0.32) : sy) + dy * 6);
                 break;
             }
+            case 9:
+            case 10: {
+                String k = mode == 9 ? "chat" : "prof";
+                Rect r = mode == 9 ? chatRect() : profileRect();
+                setInt(k + "_cx", r.centerX() + dx * 6);
+                setInt(k + "_cy", r.centerY() + dy * 6);
+                break;
+            }
             default:
                 break;
         }
@@ -1359,6 +1444,14 @@ public class MaskService extends AccessibilityService {
             case 8:
                 setInt("swipe_dist", Math.max(10, prefs.getInt("swipe_dist", 55) + d));
                 break;
+            case 9:
+            case 10: {
+                String k = mode == 9 ? "chat" : "prof";
+                Rect r = mode == 9 ? chatRect() : profileRect();
+                setInt(k + "_cw", Math.max(10, r.width() + d * 6));
+                setInt(k + "_ch", Math.max(10, r.height() + d * 6));
+                break;
+            }
             default:
                 break;
         }
@@ -1367,7 +1460,7 @@ public class MaskService extends AccessibilityService {
     /** Un simple appui sur la cible, sans la suite de la macro. */
     private void tapOnce() {
         maskOffUntil = SystemClock.uptimeMillis() + 700;
-        blockTop = blocker(blockTop, new Rect());
+        blocks[0] = blocker(blocks[0], new Rect());
         Path p = new Path();
         p.moveTo(macroX(), macroY());
         tap(p, 60, "test en " + macroX() + "," + macroY());
