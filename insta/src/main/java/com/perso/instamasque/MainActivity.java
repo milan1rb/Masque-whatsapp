@@ -110,11 +110,24 @@ public class MainActivity extends Activity {
         number("swipe_delay", 450, 100, 2000, "Attente avant le glissement, en millisecondes");
 
         title("Caches d'une conversation");
-        help("Dans une conversation, la photo de profil à gauche du nom est recouverte. "
-                + "Dans le menu de la conversation, le bouton Profil l'est aussi, avec son "
-                + "icône. Les deux se placent au pixel depuis le panneau de réglage.");
-        check("mask_chat", "Cacher la photo de profil en haut d'une conversation", true);
+        help("Dans une conversation, la photo de profil à gauche du nom ne répond plus "
+                + "aux appuis, sans rien peindre : l'image reste visible. Dans le menu de "
+                + "la conversation, le bouton Profil est recouvert, avec son icône. Les "
+                + "deux se placent au pixel depuis le panneau de réglage.");
+        check("mask_chat", "Bloquer la photo de profil en haut d'une conversation", true);
         check("mask_menu", "Cacher le bouton Profil dans le menu", true);
+
+        title("Notifications et demandes de suivi");
+        help("Sur la page des notifications, tout est recouvert sauf l'en-tête et la "
+                + "ligne « Demandes de suivi ». Sur la page des demandes, tout ce qui "
+                + "suit le titre « Suggestions » est recouvert. Les deux zones sont "
+                + "retrouvées à chaque fois d'après le texte affiché, elles suivent donc "
+                + "la mise en page.");
+        check("mask_notif", "Ne garder que les demandes de suivi dans les notifications", true);
+        number("notif_pad", 13, 0, 80, "Marge sous la ligne « Demandes de suivi », en dp");
+        number("notif_top", 64, 0, 300, "Début du cache s'il n'y a aucune demande, en dp");
+        check("mask_sugg", "Cacher les suggestions dans les demandes de suivi", true);
+        number("sugg_pad", 10, 0, 80, "Marge au-dessus du titre « Suggestions », en dp");
 
         title("Auteur d'un reel");
         help("Sur un reel, la ligne avec la photo de profil, le nom du compte et le "

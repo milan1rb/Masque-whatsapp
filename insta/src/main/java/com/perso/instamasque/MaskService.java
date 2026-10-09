@@ -59,11 +59,12 @@ public class MaskService extends AccessibilityService {
     private BarCanvas canvas;      // le dessin de la barre
     private View touchView;        // la fenêtre qui reçoit les appuis
     private View adjuster;         // le panneau de réglage
-    // 0 haut de la page Récent, 1 colonne des croix, 2 photo de profil d'une
-    // conversation, 3 bouton Profil du menu, 4 ligne de l'auteur d'un reel.
-    // Les quatre premiers sont peints, le dernier est transparent.
-    private final View[] blocks = new View[5];
-    private static final int PAINTED = 4;
+    // Peints : 0 haut de la page Récent, 1 colonne des croix, 2 bouton Profil du
+    // menu, 3 page des notifications, 4 suggestions des demandes de suivi.
+    // Transparents : 5 ligne de l'auteur d'un reel, 6 photo de profil d'une
+    // conversation. Les transparents avalent les appuis sans rien peindre.
+    private final View[] blocks = new View[7];
+    private static final int PAINTED = 5;
 
     private boolean scheduled = false;
     private int W = 1080, H = 2400;
@@ -82,6 +83,8 @@ public class MaskService extends AccessibilityService {
     private boolean onRecent = false;    // la page des comptes consultés récemment
     private boolean onMenu = false;      // le menu d'une conversation
     private Rect lastReel = new Rect();  // la ligne de l'auteur, repérée sur un reel
+    private Rect lastNotif = new Rect(); // la zone cachée des notifications
+    private Rect lastSugg = new Rect();  // la zone cachée des suggestions
     private int learn = 0;               // 1 : apprendre la zone gauche, -1 : la droite
     private long lastTapTime = 0;        // anti-rebond des appuis sur la barre
 
@@ -271,17 +274,30 @@ public class MaskService extends AccessibilityService {
             onMenu = menu;
             log(menu ? "Menu de conversation : bouton Profil caché" : "Menu quitté");
         }
-        Rect[] m = new Rect[5];
+        Rect[] m = new Rect[blocks.length];
+        for (int i = 0; i < m.length; i++) m[i] = new Rect();
         m[0] = recent ? maskTopRect() : new Rect();
         m[1] = recent ? maskRightRect() : new Rect();
-        m[2] = prefs.getBoolean("mask_chat", true) && chat ? chatRect() : new Rect();
-        m[3] = menu ? profileRect() : new Rect();
-        m[4] = chat ? new Rect() : reelRect(items);
-        if (!m[4].equals(lastReel)) {
-            lastReel = new Rect(m[4]);
-            log(m[4].isEmpty() ? "Reel quitté"
-                    : "Reel : ligne de l'auteur bloquée " + m[4].toShortString());
-            if (canvas != null) canvas.invalidate();
+        m[2] = menu ? profileRect() : new Rect();
+        m[3] = notifRect(items);
+        m[4] = suggRect(items);
+        m[5] = chat ? new Rect() : reelRect(items);
+        m[6] = prefs.getBoolean("mask_chat", true) && chat ? chatRect() : new Rect();
+        if (!m[5].equals(lastReel)) {
+            lastReel = new Rect(m[5]);
+            log(m[5].isEmpty() ? "Reel quitté"
+                    : "Reel : ligne de l'auteur bloquée " + m[5].toShortString());
+            if (canvas != null && prefs.getBoolean("adjust", false)) canvas.invalidate();
+        }
+        if (!m[3].equals(lastNotif)) {
+            lastNotif = new Rect(m[3]);
+            log(m[3].isEmpty() ? "Notifications quittées"
+                    : "Notifications : tout caché sous " + m[3].top);
+        }
+        if (!m[4].equals(lastSugg)) {
+            lastSugg = new Rect(m[4]);
+            log(m[4].isEmpty() ? "Demandes de suivi quittées"
+                    : "Suggestions cachées à partir de " + m[4].top);
         }
         applyMasks(m);
 
@@ -576,6 +592,66 @@ public class MaskService extends AccessibilityService {
     /** Le bouton Profil, dans le menu d'une conversation. */
     private Rect profileRect() {
         return pxRect("prof", 210, 800, 190, 210);
+    }
+
+    /**
+     * Sur la page des notifications : tout est recouvert, sauf l'en-tête et la
+     * ligne « Demandes de suivi » qui la suit.
+     */
+    private Rect notifRect(List<Item> items) {
+        if (!prefs.getBoolean("mask_notif", true)) return new Rect();
+        boolean page = false;
+        Rect row = null;
+        for (Item it : items) {
+            if (!it.visible || it.r.isEmpty()) continue;
+            String s = (it.text + " " + it.desc).toLowerCase(Locale.ROOT).trim();
+            if (it.r.centerY() < H * 0.09 && s.startsWith("notification")) page = true;
+            if (s.startsWith("demandes de suivi") || s.startsWith("follow request")
+                    || s.startsWith("approuvez") || s.contains("ignorez les demandes")) {
+                Rect r = new Rect(it.r);
+                AccessibilityNodeInfo c = clickable(it.node);
+                if (c != null) {          // la ligne entière, titre et sous-titre
+                    Rect box = new Rect();
+                    c.getBoundsInScreen(box);
+                    if (!box.isEmpty() && box.height() < dp(170)) r = box;
+                }
+                if (row == null) row = r;
+                else if (r.bottom > row.bottom) row = r;
+            }
+        }
+        if (!page) return new Rect();
+        int top = row == null ? dp(prefs.getInt("notif_top", 64))
+                              : row.bottom + dp(prefs.getInt("notif_pad", 13));
+        int bottom = barRect().top;
+        if (bottom <= top) bottom = H;
+        return new Rect(0, top, W, bottom);
+    }
+
+    /**
+     * Sur la page des demandes de suivi : tout ce qui suit le titre
+     * « Suggestions » est recouvert.
+     */
+    private Rect suggRect(List<Item> items) {
+        if (!prefs.getBoolean("mask_sugg", true)) return new Rect();
+        boolean page = false;
+        Rect head = null;
+        for (Item it : items) {
+            if (!it.visible || it.r.isEmpty()) continue;
+            String s = (it.text + " " + it.desc).toLowerCase(Locale.ROOT).trim();
+            if (it.r.centerY() < H * 0.09
+                    && (s.startsWith("demandes de suivi") || s.startsWith("follow request"))) {
+                page = true;
+            }
+            if (s.equals("suggestions") || s.startsWith("suggestions ")
+                    || s.startsWith("suggestions pour")) {
+                if (head == null || it.r.top < head.top) head = new Rect(it.r);
+            }
+        }
+        if (!page || head == null) return new Rect();
+        int top = Math.max(0, head.top - dp(prefs.getInt("sugg_pad", 10)));
+        int bottom = barRect().top;
+        if (bottom <= top) bottom = H;
+        return new Rect(0, top, W, bottom);
     }
 
     /**
@@ -1061,17 +1137,21 @@ public class MaskService extends AccessibilityService {
                 Rect b = btnRect(l);
                 c.drawRect(b.left, b.top, b.right, b.bottom, q);
             }
-            q.setColor(0xFF76FF03);                       // les quatre caches
-            for (Rect m : new Rect[]{maskTopRect(), maskRightRect(), chatRect(), profileRect()}) {
+            q.setColor(0xFF76FF03);                       // les caches peints
+            for (Rect m : new Rect[]{maskTopRect(), maskRightRect(), profileRect(),
+                    lastNotif, lastSugg}) {
                 if (!m.isEmpty()) {
                     c.drawRect(Math.max(1, m.left), m.top,
                             Math.min(W - 1, m.right), m.bottom, q);
                 }
             }
 
-            if (!lastReel.isEmpty()) {                    // la ligne de l'auteur d'un reel
-                q.setColor(0xFFFF9100);
-                c.drawRect(1, lastReel.top, lastReel.right, lastReel.bottom, q);
+            q.setColor(0xFFFF9100);                       // les caches transparents
+            for (Rect m : new Rect[]{lastReel, chatRect()}) {
+                if (!m.isEmpty()) {
+                    c.drawRect(Math.max(1, m.left), m.top,
+                            Math.min(W - 1, m.right), m.bottom, q);
+                }
             }
 
             q.setColor(0xFFFF4081);                       // la cible de la macro
@@ -1167,7 +1247,9 @@ public class MaskService extends AccessibilityService {
         Rect[] e = new Rect[blocks.length];
         for (int i = 0; i < e.length; i++) e[i] = new Rect();
         lastReel = new Rect();
-        if (canvas != null) canvas.setMasks(new Rect[]{e[0], e[1], e[2], e[3]});
+        lastNotif = new Rect();
+        lastSugg = new Rect();
+        if (canvas != null) canvas.setMasks(new Rect[]{e[0], e[1], e[2], e[3], e[4]});
         for (int i = 0; i < blocks.length; i++) blocks[i] = blocker(blocks[i], e[i]);
         onRecent = false;
     }
