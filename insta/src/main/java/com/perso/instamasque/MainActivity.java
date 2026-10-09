@@ -116,6 +116,16 @@ public class MainActivity extends Activity {
         check("mask_chat", "Cacher la photo de profil en haut d'une conversation", true);
         check("mask_menu", "Cacher le bouton Profil dans le menu", true);
 
+        title("Auteur d'un reel");
+        help("Sur un reel, la ligne avec la photo de profil, le nom du compte et le "
+                + "bouton Suivre ne répond plus aux appuis. Le cache est transparent : "
+                + "rien n'est peint, l'image reste visible. Sa hauteur est retrouvée à "
+                + "chaque reel, seul le bord droit est fixe — il s'arrête avant les icônes "
+                + "J'aime et Commenter.");
+        check("mask_reel", "Bloquer la ligne de l'auteur", true);
+        number("reel_right", 860, 100, 1080, "Bord droit du cache, en pixels");
+        number("reel_pad", 6, 0, 60, "Marge au-dessus et en dessous de la ligne, en dp");
+
         title("Caches de la page Récent");
         help("Sur la page des comptes récents, le haut de l'écran (retour, barre de "
                 + "recherche, ligne « Récent / Voir tout ») et la colonne des croix à "

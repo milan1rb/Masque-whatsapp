@@ -60,8 +60,10 @@ public class MaskService extends AccessibilityService {
     private View touchView;        // la fenêtre qui reçoit les appuis
     private View adjuster;         // le panneau de réglage
     // 0 haut de la page Récent, 1 colonne des croix, 2 photo de profil d'une
-    // conversation, 3 bouton Profil du menu d'une conversation
-    private final View[] blocks = new View[4];
+    // conversation, 3 bouton Profil du menu, 4 ligne de l'auteur d'un reel.
+    // Les quatre premiers sont peints, le dernier est transparent.
+    private final View[] blocks = new View[5];
+    private static final int PAINTED = 4;
 
     private boolean scheduled = false;
     private int W = 1080, H = 2400;
@@ -79,6 +81,7 @@ public class MaskService extends AccessibilityService {
     private String launcherPkg = "";
     private boolean onRecent = false;    // la page des comptes consultés récemment
     private boolean onMenu = false;      // le menu d'une conversation
+    private Rect lastReel = new Rect();  // la ligne de l'auteur, repérée sur un reel
     private int learn = 0;               // 1 : apprendre la zone gauche, -1 : la droite
     private long lastTapTime = 0;        // anti-rebond des appuis sur la barre
 
@@ -268,11 +271,18 @@ public class MaskService extends AccessibilityService {
             onMenu = menu;
             log(menu ? "Menu de conversation : bouton Profil caché" : "Menu quitté");
         }
-        Rect[] m = new Rect[4];
+        Rect[] m = new Rect[5];
         m[0] = recent ? maskTopRect() : new Rect();
         m[1] = recent ? maskRightRect() : new Rect();
         m[2] = prefs.getBoolean("mask_chat", true) && chat ? chatRect() : new Rect();
         m[3] = menu ? profileRect() : new Rect();
+        m[4] = chat ? new Rect() : reelRect(items);
+        if (!m[4].equals(lastReel)) {
+            lastReel = new Rect(m[4]);
+            log(m[4].isEmpty() ? "Reel quitté"
+                    : "Reel : ligne de l'auteur bloquée " + m[4].toShortString());
+            if (canvas != null) canvas.invalidate();
+        }
         applyMasks(m);
 
         // Dans une conversation, ou clavier ouvert : la barre s'efface
@@ -566,6 +576,42 @@ public class MaskService extends AccessibilityService {
     /** Le bouton Profil, dans le menu d'une conversation. */
     private Rect profileRect() {
         return pxRect("prof", 210, 800, 190, 210);
+    }
+
+    /**
+     * Sur un reel : la ligne de l'auteur — photo de profil, nom et bouton Suivre.
+     * Sa hauteur change d'un reel à l'autre (légende plus ou moins longue), donc
+     * elle est repérée à chaque fois : on s'accroche à la photo de profil et au
+     * bouton Suivre, et on barre toute la largeur jusqu'avant les icônes de droite.
+     * Ce cache est transparent : il avale les appuis sans rien peindre.
+     */
+    private Rect reelRect(List<Item> items) {
+        if (!prefs.getBoolean("mask_reel", true)) return new Rect();
+        Rect row = null;
+        int side = 0;
+        for (Item it : items) {
+            if (!it.visible || it.r.isEmpty()) continue;
+            int cy = it.r.centerY();
+            // la colonne d'icônes de droite : la signature d'un reel
+            if (it.node.isClickable() && it.r.centerX() > W * 0.85
+                    && cy > H * 0.4 && cy < H * 0.92) side++;
+            if (cy < H * 0.45 || cy > H * 0.93) continue;
+            String s = (it.text + " " + it.desc).toLowerCase(Locale.ROOT).trim();
+            boolean follow = s.equals("suivre") || s.equals("s'abonner")
+                    || s.equals("follow") || s.equals("se désabonner")
+                    || s.equals("abonné") || s.equals("abonnement");
+            boolean pic = it.node.isClickable() && it.r.left < W / 5
+                    && Math.abs(it.r.width() - it.r.height()) < dp(12)
+                    && it.r.width() > dp(28) && it.r.width() < dp(70);
+            if (follow || pic) {
+                if (row == null) row = new Rect(it.r);
+                else row.union(it.r);
+            }
+        }
+        if (row == null || side < 2) return new Rect();
+        int pad = dp(prefs.getInt("reel_pad", 6));
+        int right = Math.min(W, prefs.getInt("reel_right", 860));
+        return new Rect(0, Math.max(0, row.top - pad), right, Math.min(H, row.bottom + pad));
     }
 
     private int[] offsets() {
@@ -1001,6 +1047,11 @@ public class MaskService extends AccessibilityService {
                 }
             }
 
+            if (!lastReel.isEmpty()) {                    // la ligne de l'auteur d'un reel
+                q.setColor(0xFFFF9100);
+                c.drawRect(1, lastReel.top, lastReel.right, lastReel.bottom, q);
+            }
+
             q.setColor(0xFFFF4081);                       // la cible de la macro
             int mx = macroX(), my = macroY();
             c.drawCircle(mx, my, dp(10), q);
@@ -1076,7 +1127,9 @@ public class MaskService extends AccessibilityService {
 
     private void applyMasks(Rect[] m) {
         if (!ensureCanvas()) return;
-        canvas.setMasks(m);
+        Rect[] painted = new Rect[PAINTED];
+        for (int i = 0; i < PAINTED; i++) painted[i] = m[i];
+        canvas.setMasks(painted);
         // pendant un appui simulé, le cache du haut laisse passer : le dessin reste,
         // seule la fenêtre qui avale les appuis s'efface un instant
         final boolean paused = SystemClock.uptimeMillis() < maskOffUntil;
@@ -1091,7 +1144,8 @@ public class MaskService extends AccessibilityService {
     private void hideMasks() {
         Rect[] e = new Rect[blocks.length];
         for (int i = 0; i < e.length; i++) e[i] = new Rect();
-        if (canvas != null) canvas.setMasks(e);
+        lastReel = new Rect();
+        if (canvas != null) canvas.setMasks(new Rect[]{e[0], e[1], e[2], e[3]});
         for (int i = 0; i < blocks.length; i++) blocks[i] = blocker(blocks[i], e[i]);
         onRecent = false;
     }
@@ -1214,7 +1268,8 @@ public class MaskService extends AccessibilityService {
             "Barre", "Icône Messages", "Icône Recherche",
             "Zone tactile Messages", "Zone tactile Recherche",
             "Cache du haut", "Cache des croix", "Cible de la macro", "Glissement",
-            "Photo de profil d'une conversation", "Bouton Profil du menu"};
+            "Photo de profil d'une conversation", "Bouton Profil du menu",
+            "Ligne de l'auteur d'un reel"};
     private int mode = 0;
     private int panelPos = 2;            // 0 haut, 1 milieu haut, 2 milieu bas, 3 bas
 
@@ -1262,9 +1317,11 @@ public class MaskService extends AccessibilityService {
                 () -> { mode = 6; refresh[0].run(); },
                 () -> { mode = 7; refresh[0].run(); },
                 () -> { mode = 8; refresh[0].run(); }}));
-        box.addView(row(new String[]{"Photo discussion", "Bouton Profil"}, new Runnable[]{
+        box.addView(row(new String[]{"Photo discussion", "Bouton Profil", "Auteur reel"},
+                new Runnable[]{
                 () -> { mode = 9; refresh[0].run(); },
-                () -> { mode = 10; refresh[0].run(); }}));
+                () -> { mode = 10; refresh[0].run(); },
+                () -> { mode = 11; refresh[0].run(); }}));
         box.addView(row(new String[]{"←", "→", "↑", "↓", "−", "+"}, new Runnable[]{
                 () -> { move(-1, 0); refresh[0].run(); },
                 () -> { move(1, 0); refresh[0].run(); },
@@ -1350,6 +1407,11 @@ public class MaskService extends AccessibilityService {
             case 10:
                 return profileRect().toShortString() + "\nvisible seulement dans le menu "
                         + "d'une conversation";
+            case 11:
+                return "bord droit " + prefs.getInt("reel_right", 860) + " px · marge "
+                        + prefs.getInt("reel_pad", 6) + " dp\n"
+                        + (lastReel.isEmpty() ? "aucun reel repéré pour l'instant"
+                                              : "repéré : " + lastReel.toShortString());
             default:
                 return "hauteur " + prefs.getInt("bar_height", 56) + " dp · bas "
                         + prefs.getInt("bar_gap", 15) + " dp\n" + barRect().toShortString()
@@ -1410,6 +1472,11 @@ public class MaskService extends AccessibilityService {
                 setInt(k + "_cy", r.centerY() + dy * 6);
                 break;
             }
+            case 11:
+                // la hauteur est trouvée tout seule : seul le bord droit se règle
+                setInt("reel_right", Math.max(100,
+                        Math.min(W, prefs.getInt("reel_right", 860) + dx * 6)));
+                break;
             default:
                 break;
         }
@@ -1452,6 +1519,9 @@ public class MaskService extends AccessibilityService {
                 setInt(k + "_ch", Math.max(10, r.height() + d * 6));
                 break;
             }
+            case 11:
+                setInt("reel_pad", Math.max(0, prefs.getInt("reel_pad", 6) + d));
+                break;
             default:
                 break;
         }
