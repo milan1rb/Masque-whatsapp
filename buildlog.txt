@@ -1,0 +1,96 @@
+Starting a Gradle Daemon (subsequent builds will be faster)
+> Task :preBuild UP-TO-DATE
+> Task :preDebugBuild UP-TO-DATE
+> Task :mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :generateDebugResValues
+> Task :javaPreCompileDebug
+> Task :checkDebugAarMetadata
+> Task :mapDebugSourceSetPaths
+> Task :generateDebugResources
+> Task :packageDebugResources
+> Task :mergeDebugResources
+> Task :createDebugCompatibleScreenManifests
+> Task :extractDeepLinksDebug
+> Task :parseDebugLocalResources
+> Task :processDebugMainManifest
+> Task :processDebugManifest
+> Task :mergeDebugShaders
+> Task :compileDebugShaders NO-SOURCE
+> Task :generateDebugAssets UP-TO-DATE
+> Task :mergeDebugAssets
+> Task :compressDebugAssets
+> Task :desugarDebugFileDependencies
+> Task :processDebugJavaRes NO-SOURCE
+> Task :checkDebugDuplicateClasses
+> Task :mergeDebugStartupProfile
+> Task :mergeDebugJavaResource
+> Task :mergeDebugJniLibFolders
+> Task :mergeExtDexDebug
+> Task :mergeLibDexDebug
+> Task :mergeDebugNativeLibs NO-SOURCE
+> Task :stripDebugDebugSymbols NO-SOURCE
+> Task :validateSigningDebug
+> Task :writeDebugAppMetadata
+> Task :writeDebugSigningConfigVersions
+> Task :insta:preBuild UP-TO-DATE
+> Task :insta:preDebugBuild UP-TO-DATE
+> Task :insta:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :insta:javaPreCompileDebug
+> Task :insta:generateDebugResValues
+> Task :insta:checkDebugAarMetadata
+> Task :insta:mapDebugSourceSetPaths
+> Task :insta:generateDebugResources
+> Task :processDebugManifestForPackage
+> Task :insta:mergeDebugResources
+> Task :insta:packageDebugResources
+> Task :insta:createDebugCompatibleScreenManifests
+> Task :insta:extractDeepLinksDebug
+> Task :insta:parseDebugLocalResources
+> Task :insta:processDebugMainManifest
+> Task :insta:processDebugManifest
+> Task :insta:processDebugManifestForPackage
+> Task :insta:mergeDebugShaders
+> Task :insta:compileDebugShaders NO-SOURCE
+> Task :insta:generateDebugAssets UP-TO-DATE
+> Task :insta:mergeDebugAssets
+> Task :insta:compressDebugAssets
+> Task :insta:desugarDebugFileDependencies
+> Task :insta:processDebugJavaRes NO-SOURCE
+> Task :insta:mergeDebugJavaResource
+> Task :insta:checkDebugDuplicateClasses
+> Task :insta:mergeDebugStartupProfile
+> Task :insta:mergeExtDexDebug
+> Task :insta:mergeLibDexDebug
+> Task :insta:mergeDebugJniLibFolders
+> Task :insta:mergeDebugNativeLibs NO-SOURCE
+> Task :insta:stripDebugDebugSymbols NO-SOURCE
+> Task :insta:validateSigningDebug
+> Task :insta:writeDebugAppMetadata
+> Task :insta:processDebugResources
+> Task :insta:writeDebugSigningConfigVersions
+> Task :processDebugResources
+
+> Task :insta:compileDebugJavaWithJavac
+Note: /home/runner/work/Masque-whatsapp/Masque-whatsapp/insta/src/main/java/com/perso/instamasque/MaskService.java uses or overrides a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+
+> Task :compileDebugJavaWithJavac
+Note: /home/runner/work/Masque-whatsapp/Masque-whatsapp/src/main/java/com/perso/wamasque/MaskService.java uses or overrides a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+
+> Task :dexBuilderDebug
+> Task :mergeDebugGlobalSynthetics
+> Task :mergeProjectDexDebug
+> Task :insta:dexBuilderDebug
+> Task :insta:mergeDebugGlobalSynthetics
+> Task :insta:mergeProjectDexDebug
+> Task :insta:packageDebug
+> Task :insta:createDebugApkListingFileRedirect
+> Task :insta:assembleDebug
+> Task :packageDebug
+> Task :createDebugApkListingFileRedirect
+> Task :assembleDebug
+gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run-1791551234101.json
+
+BUILD SUCCESSFUL in 15s
+66 actionable tasks: 66 executed
