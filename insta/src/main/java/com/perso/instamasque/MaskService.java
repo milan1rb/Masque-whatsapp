@@ -587,28 +587,50 @@ public class MaskService extends AccessibilityService {
      */
     private Rect reelRect(List<Item> items) {
         if (!prefs.getBoolean("mask_reel", true)) return new Rect();
-        Rect row = null;
-        int side = 0;
+
+        // Une liste de conversations a aussi des photos rondes à gauche et des
+        // icônes cliquables à droite : ces deux signes ne suffisent pas. On exige
+        // le libellé « J'aime » de la colonne de droite, qui n'existe que sur un
+        // reel, et on ne retient qu'une seule ligne.
+        boolean signature = false;
+        Rect follow = null;
+        List<Rect> pics = new ArrayList<>();
         for (Item it : items) {
             if (!it.visible || it.r.isEmpty()) continue;
-            int cy = it.r.centerY();
-            // la colonne d'icônes de droite : la signature d'un reel
-            if (it.node.isClickable() && it.r.centerX() > W * 0.85
-                    && cy > H * 0.4 && cy < H * 0.92) side++;
-            if (cy < H * 0.45 || cy > H * 0.93) continue;
             String s = (it.text + " " + it.desc).toLowerCase(Locale.ROOT).trim();
-            boolean follow = s.equals("suivre") || s.equals("s'abonner")
-                    || s.equals("follow") || s.equals("se désabonner")
-                    || s.equals("abonné") || s.equals("abonnement");
-            boolean pic = it.node.isClickable() && it.r.left < W / 5
+            if (it.r.centerX() > W * 0.8
+                    && (s.contains("aime") || s.equals("like") || s.contains("liker")
+                        || s.contains("son original") || s.contains("audio original"))) {
+                signature = true;
+            }
+            int cy = it.r.centerY();
+            if (cy < H * 0.45 || cy > H * 0.93) continue;
+            if (s.equals("suivre") || s.equals("s'abonner") || s.equals("follow")
+                    || s.equals("se désabonner") || s.equals("abonné")) {
+                if (follow == null) follow = new Rect(it.r);
+            }
+            if (it.node.isClickable() && it.r.left < W / 5
                     && Math.abs(it.r.width() - it.r.height()) < dp(12)
-                    && it.r.width() > dp(28) && it.r.width() < dp(70);
-            if (follow || pic) {
-                if (row == null) row = new Rect(it.r);
-                else row.union(it.r);
+                    && it.r.width() > dp(28) && it.r.width() < dp(70)) {
+                pics.add(new Rect(it.r));
             }
         }
-        if (row == null || side < 2) return new Rect();
+        if (!signature) return new Rect();
+
+        // la ligne de l'auteur : celle du bouton Suivre, sinon la photo la plus basse
+        Rect row = follow;
+        if (row == null) {
+            for (Rect p : pics) if (row == null || p.top > row.top) row = new Rect(p);
+            if (row == null) return new Rect();
+        }
+        for (Rect p : pics) {
+            if (Math.abs(p.centerY() - row.centerY()) <= dp(30)) row.union(p);
+        }
+        if (row.height() > dp(80)) {       // garde-fou : ce n'est plus une ligne
+            log("Reel : ligne de l'auteur douteuse (" + row.toShortString() + "), ignorée");
+            return new Rect();
+        }
+
         int pad = dp(prefs.getInt("reel_pad", 6));
         int right = Math.min(W, prefs.getInt("reel_right", 860));
         return new Rect(0, Math.max(0, row.top - pad), right, Math.min(H, row.bottom + pad));
