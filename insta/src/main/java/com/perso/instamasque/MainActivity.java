@@ -119,7 +119,11 @@ public class MainActivity extends Activity {
         number("chatpic_pad", 4, 0, 40, "Marge autour de ces petites photos, en dp");
         number("chatpic_min", 18, 8, 60, "Taille minimum d'une petite photo, en dp");
         number("chatpic_max", 44, 20, 90, "Taille maximum d'une petite photo, en dp");
-        check("mask_menu", "Cacher le bouton Profil dans le menu", true);
+        check("mask_menu", "Cacher le premier bouton du menu d'une conversation "
+                + "(Profil à deux, Ajouter dans un groupe)", true);
+        number("menu_up", 50, 0, 150, "Remontée du cache au-dessus du libellé, en dp "
+                + "(pour couvrir l'icône)");
+        number("menu_pad", 12, 0, 80, "Débordement sur les côtés, en dp");
 
         title("Notifications et demandes de suivi");
         help("Sur la page des notifications, tout est recouvert sauf l'en-tête et la "
