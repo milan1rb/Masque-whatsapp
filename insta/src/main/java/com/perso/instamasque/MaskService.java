@@ -65,6 +65,9 @@ public class MaskService extends AccessibilityService {
     // conversation. Les transparents avalent les appuis sans rien peindre.
     private final View[] blocks = new View[7];
     private static final int PAINTED = 5;
+    // les petites photos à gauche des messages reçus, repérées une par une
+    private final View[] chatPics = new View[8];
+    private List<Rect> lastChatPics = new ArrayList<>();
 
     private boolean scheduled = false;
     private int W = 1080, H = 2400;
@@ -300,6 +303,13 @@ public class MaskService extends AccessibilityService {
                     : "Suggestions cachées à partir de " + m[4].top);
         }
         applyMasks(m);
+
+        List<Rect> pics = chat ? chatPicRects(items) : new ArrayList<>();
+        if (!pics.equals(lastChatPics)) {
+            lastChatPics = pics;
+            if (canvas != null && prefs.getBoolean("adjust", false)) canvas.invalidate();
+        }
+        applyChatPics(pics);
 
         // Dans une conversation, ou clavier ouvert : la barre s'efface
         if (imeVisible() || (prefs.getBoolean("hide_in_chat", true) && chat)) {
@@ -603,6 +613,48 @@ public class MaskService extends AccessibilityService {
     /** Le bouton Profil, dans le menu d'une conversation. */
     private Rect profileRect() {
         return pxRect("prof", 210, 800, 190, 210);
+    }
+
+    /**
+     * Dans une conversation : les petites photos de profil posées à gauche des
+     * messages reçus. Elles défilent avec la discussion, donc on les repère à
+     * chaque passage. Ces caches sont invisibles : ils avalent juste l'appui.
+     */
+    private List<Rect> chatPicRects(List<Item> items) {
+        List<Rect> out = new ArrayList<>();
+        if (!prefs.getBoolean("mask_chatpic", true)) return out;
+        int pad = dp(prefs.getInt("chatpic_pad", 4));
+        int min = dp(prefs.getInt("chatpic_min", 18));
+        int max = dp(prefs.getInt("chatpic_max", 44));
+        for (Item it : items) {
+            if (!it.visible || it.r.isEmpty()) continue;
+            if (it.r.left > dp(50)) continue;                   // collées au bord gauche
+            if (it.r.centerY() < dp(90) || it.r.centerY() > H - dp(110)) continue;
+            int w = it.r.width(), h = it.r.height();
+            if (w < min || w > max || Math.abs(w - h) > dp(6)) continue;   // un petit rond
+            Rect r = new Rect(it.r);
+            r.inset(-pad, -pad);
+            boolean merged = false;
+            for (Rect e : out) {
+                if (Rect.intersects(e, r)) {
+                    e.union(r);
+                    merged = true;
+                    break;
+                }
+            }
+            if (!merged && out.size() < chatPics.length) out.add(r);
+        }
+        return out;
+    }
+
+    private void applyChatPics(List<Rect> rs) {
+        final List<Rect> list = rs;
+        handler.post(() -> {
+            for (int i = 0; i < chatPics.length; i++) {
+                chatPics[i] = blocker(chatPics[i],
+                        i < list.size() ? list.get(i) : new Rect());
+            }
+        });
     }
 
     /**
@@ -1158,7 +1210,11 @@ public class MaskService extends AccessibilityService {
             }
 
             q.setColor(0xFFFF9100);                       // les caches transparents
-            for (Rect m : new Rect[]{lastReel, chatRect()}) {
+            List<Rect> clear = new ArrayList<>();
+            clear.add(lastReel);
+            clear.add(chatRect());
+            clear.addAll(lastChatPics);
+            for (Rect m : clear) {
                 if (!m.isEmpty()) {
                     c.drawRect(Math.max(1, m.left), m.top,
                             Math.min(W - 1, m.right), m.bottom, q);
@@ -1260,6 +1316,8 @@ public class MaskService extends AccessibilityService {
         lastReel = new Rect();
         lastNotif = new Rect();
         lastSugg = new Rect();
+        lastChatPics = new ArrayList<>();
+        for (int i = 0; i < chatPics.length; i++) chatPics[i] = blocker(chatPics[i], new Rect());
         if (canvas != null) canvas.setMasks(new Rect[]{e[0], e[1], e[2], e[3], e[4]});
         for (int i = 0; i < blocks.length; i++) blocks[i] = blocker(blocks[i], e[i]);
         onRecent = false;

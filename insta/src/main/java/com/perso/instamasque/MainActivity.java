@@ -115,6 +115,10 @@ public class MainActivity extends Activity {
                 + "la conversation, le bouton Profil est recouvert, avec son icône. Les "
                 + "deux se placent au pixel depuis le panneau de réglage.");
         check("mask_chat", "Bloquer la photo de profil en haut d'une conversation", true);
+        check("mask_chatpic", "Bloquer les petites photos à gauche des messages reçus", true);
+        number("chatpic_pad", 4, 0, 40, "Marge autour de ces petites photos, en dp");
+        number("chatpic_min", 18, 8, 60, "Taille minimum d'une petite photo, en dp");
+        number("chatpic_max", 44, 20, 90, "Taille maximum d'une petite photo, en dp");
         check("mask_menu", "Cacher le bouton Profil dans le menu", true);
 
         title("Notifications et demandes de suivi");
