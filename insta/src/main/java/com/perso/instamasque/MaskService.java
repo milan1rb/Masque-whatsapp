@@ -319,23 +319,32 @@ public class MaskService extends AccessibilityService {
      * les caches s'y posaient à tort.
      */
     private boolean recentPage(List<Item> items) {
-        String title = null;
-        boolean field = false, gallery = false;
+        String title = null, gallery = null;
+        boolean field = false;
         for (Item it : items) {
             if (!it.visible || it.r.isEmpty()) continue;
             String s = (it.text + " " + it.desc).toLowerCase(Locale.ROOT).trim();
-            if (s.contains("appareil photo") || s.contains("galerie")
-                    || s.contains("gallery") || s.contains("pellicule")) gallery = true;
+            // La barre d'onglets d'Instagram a elle-même un onglet « Appareil
+            // photo » : on ne regarde donc que le contenu, jamais le bas de l'écran.
+            if (it.r.centerY() < H - dp(150)
+                    && (s.contains("appareil photo") || s.contains("galerie")
+                        || s.contains("gallery") || s.contains("pellicule"))) {
+                gallery = s + " " + it.r.toShortString();
+            }
             if (it.r.centerY() > H * 0.35) continue;
             if (it.node.isEditable()) field = true;
+            // « Voir tout », à droite du titre : l'autre signe de la page de recherche
+            if (s.equals("voir tout") || s.equals("see all") || s.equals("tout voir")) {
+                field = true;
+            }
             if (s.equals("récent") || s.equals("recent")) title = it.text + it.desc;
         }
-        if (title != null && gallery) {
-            log("Titre « Récent » vu, mais c'est la galerie : pas de cache");
+        if (title != null && gallery != null) {
+            log("Titre « Récent » vu, mais c'est la galerie (" + gallery + ") : pas de cache");
             return false;
         }
         if (title != null && !field) {
-            log("Titre « Récent » vu sans champ de recherche : pas de cache");
+            log("Titre « Récent » vu sans champ de recherche ni « Voir tout » : pas de cache");
             return false;
         }
         return title != null;
@@ -357,6 +366,8 @@ public class MaskService extends AccessibilityService {
         boolean profil = false, rest = false;
         for (Item it : items) {
             if (!it.visible) continue;
+            // l'onglet « Profil » de la barre d'Instagram ne compte pas
+            if (it.r.centerY() > H - dp(150)) continue;
             String s = (it.text + " " + it.desc).toLowerCase(Locale.ROOT).trim();
             if (s.equals("profil") || s.equals("profile")) profil = true;
             if (s.contains("sourdine") || s.contains("confidentialité")
