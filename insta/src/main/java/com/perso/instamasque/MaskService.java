@@ -592,9 +592,12 @@ public class MaskService extends AccessibilityService {
         return new Rect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2);
     }
 
-    /** La photo de profil à gauche du nom, en haut d'une conversation. */
+    /**
+     * En haut d'une conversation : la photo de profil ET le nom, qui ouvrent tous
+     * les deux le profil. S'arrête avant les icônes d'appel, qui commencent à 801.
+     */
     private Rect chatRect() {
-        return pxRect("chat", 240, 148, 126, 126);
+        return pxRect("chat", 480, 149, 600, 112);
     }
 
     /**

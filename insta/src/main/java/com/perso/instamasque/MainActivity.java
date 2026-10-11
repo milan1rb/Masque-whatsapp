@@ -110,11 +110,13 @@ public class MainActivity extends Activity {
         number("swipe_delay", 450, 100, 2000, "Attente avant le glissement, en millisecondes");
 
         title("Caches d'une conversation");
-        help("Dans une conversation, la photo de profil à gauche du nom ne répond plus "
-                + "aux appuis, sans rien peindre : l'image reste visible. Dans le menu de "
+        help("Dans une conversation, la photo de profil et le nom ne répondent plus "
+                + "aux appuis, sans rien peindre : tout reste visible. Les icônes d'appel "
+                + "et la flèche de retour restent utilisables. Dans le menu de "
                 + "la conversation, le bouton Profil est recouvert, avec son icône. Les "
                 + "deux se placent au pixel depuis le panneau de réglage.");
-        check("mask_chat", "Bloquer la photo de profil en haut d'une conversation", true);
+        check("mask_chat", "Bloquer la photo de profil et le nom, en haut d'une conversation",
+                true);
         check("mask_chatpic", "Bloquer les petites photos à gauche des messages reçus", true);
         number("chatpic_pad", 4, 0, 40, "Marge autour de ces petites photos, en dp");
         number("chatpic_min", 18, 8, 60, "Taille minimum d'une petite photo, en dp");
